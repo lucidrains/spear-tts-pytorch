@@ -18,7 +18,7 @@ setup(
     'text-to-speech'
   ],
   install_requires=[
-    'audiolm-pytorch',
+    'audiolm-pytorch>=1.2.8',
     'beartype',
     'einops>=0.6.1',
     'torch>=1.6',
