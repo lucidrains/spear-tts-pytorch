@@ -22,6 +22,7 @@ setup(
     'beartype',
     'einops>=0.6.1',
     'torch>=1.6',
+    'x-clip'
   ],
   classifiers=[
     'Development Status :: 4 - Beta',

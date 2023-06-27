@@ -10,7 +10,7 @@ from spear_tts_pytorch.attend import Attend
 from audiolm_pytorch import FairseqVQWav2Vec, HubertWithKmeans
 
 from beartype import beartype
-from beartype.typing import Optional, Union
+from beartype.typing import Optional, Union, Callable
 
 # helpers
 
@@ -28,6 +28,7 @@ class TextToSemantic(Module):
         self,
         dim,
         *,
+        tokenizer_encode: Optional[Callable] = None,
         num_text_token_ids,
         wav2vec: Optional[Union[FairseqVQWav2Vec, HubertWithKmeans]] = None,
         num_semantic_token_ids = None,
@@ -39,6 +40,8 @@ class TextToSemantic(Module):
         self.dim = dim
         self.wav2vec = wav2vec
 
+        self.tokenizer_encode = tokenizer_encode
+
         num_semantic_token_ids = wav2vec.codebook_size if exists(wav2vec) else num_semantic_token_ids
         assert exists(num_semantic_token_ids), 'you need to either pass in a wav2vec model from audiolm-pytorch, or specify the number of semantic token ids with num_semantic_token_ids'
 
@@ -48,5 +51,8 @@ class TextToSemantic(Module):
 
         self.text_token_emb = nn.Embedding(num_text_token_ids, dim)
 
-    def forward(self, x):
+    def forward(
+        self,
+        x
+    ):
         return x
