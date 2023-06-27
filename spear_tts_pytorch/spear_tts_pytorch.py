@@ -113,16 +113,23 @@ class TextToSemantic(Module):
 
         self.num_semantic_token_ids = num_semantic_token_ids
         self.semantic_pad_id = semantic_pad_id
-        self.semantic_token_emb = nn.Embedding(num_semantic_token_ids, dim)
 
+        self.semantic_token_emb = nn.Embedding(num_semantic_token_ids, dim)
         self.text_token_emb = nn.Embedding(num_text_token_ids, dim)
+
+        self.to_semantic_logit = nn.Linear(dim, num_semantic_token_ids, bias = False)
+        self.to_text_logit = nn.Linear(dim, num_text_token_ids, bias = False)
+
+        self.to_semantic_logit.weight = self.semantic_token_emb.weight
+        self.to_text_logit.weight = self.to_text_logit.weight
 
     @beartype
     def forward(
         self,
-        x,
+        ids: Tensor,
+        target_ids: Tensor,
         *,
         input_type: SpeechOrTextLiteral,
         target_type: SpeechOrTextLiteral
     ):
-        return x
+        return ids
