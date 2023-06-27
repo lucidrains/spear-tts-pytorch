@@ -5,12 +5,10 @@ from torch.nn import Module, ModuleList
 
 from einops import rearrange, repeat
 
-from spear_tts_pytorch.attend import Attend
-
 from audiolm_pytorch import FairseqVQWav2Vec, HubertWithKmeans
 
 from beartype import beartype
-from beartype.typing import Optional, Union, Callable
+from beartype.typing import Optional, Union, Callable, Literal, Tuple
 
 # helpers
 
@@ -88,6 +86,8 @@ class RelativePositionBias(nn.Module):
 
 # class
 
+SpeechOrTextLiteral = Union[Literal['speech'], Literal['text']]
+
 class TextToSemantic(Module):
     @beartype
     def __init__(
@@ -117,8 +117,12 @@ class TextToSemantic(Module):
 
         self.text_token_emb = nn.Embedding(num_text_token_ids, dim)
 
+    @beartype
     def forward(
         self,
-        x
+        x,
+        *,
+        input_type: SpeechOrTextLiteral,
+        target_type: SpeechOrTextLiteral
     ):
         return x
