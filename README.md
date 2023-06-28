@@ -1,3 +1,5 @@
+<img src="./spear-tts.png" width="450px"></img>
+
 ## Spear-TTS - Pytorch (wip)
 
 Implementation of <a href="https://arxiv.org/abs/2302.03540">Spear-TTS</a> - multi-speaker text-to-speech attention network, in Pytorch
