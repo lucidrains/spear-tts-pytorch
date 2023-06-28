@@ -4,6 +4,12 @@ Implementation of <a href="https://arxiv.org/abs/2302.03540">Spear-TTS</a> - mul
 
 The text-to-semantic module built here will be used for <a href="https://github.com/lucidrains/soundstorm-pytorch">SoundStorm</a> for conditioning.
 
+## Todo
+
+- [ ] add eos logic + generate, and hook up end-to-end generation in soundstorm
+- [ ] add total flexiblity of which layers of encoder / decoder to freeze during training
+- [ ] add first pretraining speech-to-speech with the reconstruction of 60% deleted tokens
+
 ## Citations
 
 ```bibtex
