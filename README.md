@@ -6,6 +6,10 @@ Implementation of <a href="https://arxiv.org/abs/2302.03540">Spear-TTS</a> - mul
 
 The text-to-semantic module built here will be used for <a href="https://github.com/lucidrains/soundstorm-pytorch">SoundStorm</a> for conditioning.
 
+## Appreciation
+
+- <a href="https://stability.ai/">Stability</a> and <a href="https://huggingface.co/">🤗 Huggingface</a> for their generous sponsorships to work on and open source cutting edge artificial intelligence research
+
 ## Todo
 
 - [ ] add eos logic + generate, and hook up end-to-end generation in soundstorm
