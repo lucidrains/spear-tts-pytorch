@@ -25,6 +25,16 @@ def default(val, d):
 def empty(t: Tensor):
     return t.numel() == 0
 
+def set_eos_id(t: Tensor, eos_id: int, pad_id: int):
+    eos_indices = ((t == pad_id).cumsum(dim = -1) == 0).sum(dim = -1, keepdim = True).long()
+
+    batch_range = torch.arange(t.shape[0], device = t.device, dtype = torch.long)
+    batch_range = rearrange(batch_range, '... -> ... 1')
+
+    t = F.pad(t, (0, 1), value = pad_id)
+    t[batch_range, eos_indices] = eos_id
+    return t
+
 # t5 relative positional bias
 
 class RelativePositionBias(nn.Module):
@@ -259,7 +269,9 @@ class TextToSemantic(Module):
         dim_head = 64,
         heads = 8,
         semantic_pad_id = -1,
-        text_pad_id = 0
+        text_pad_id = 0,
+        autoset_semantic_eos_id = True,
+        autoset_text_eos_id = True,
     ):
         super().__init__()
         self.dim = dim
@@ -286,10 +298,22 @@ class TextToSemantic(Module):
             text = text_pad_id
         )
 
+        # eos id
+
+        self.autoset_eos_id = dict(
+            speech = autoset_semantic_eos_id,
+            text = autoset_text_eos_id
+        )
+
+        self.eos_id = dict(
+            speech = num_semantic_token_ids,
+            text = num_text_token_ids
+        )
+
         # embedding
 
-        semantic_token_emb = nn.Embedding(num_semantic_token_ids, dim)
-        text_token_emb = nn.Embedding(num_text_token_ids, dim)
+        semantic_token_emb = nn.Embedding(num_semantic_token_ids + int(autoset_semantic_eos_id), dim)
+        text_token_emb = nn.Embedding(num_text_token_ids + int(autoset_text_eos_id), dim)
 
         self.semantic_token_emb = semantic_token_emb
 
@@ -362,18 +386,28 @@ class TextToSemantic(Module):
         source_token_emb = self.token_emb[source_type]
         source_pad_id = self.pad_id[source_type]
 
-        # if source mask is not passed in
-        # automatically derive by the padding id of the modality
-
-        if not exists(source_mask) and source.dtype == torch.long:
-            source_mask = source != source_pad_id
-
         # all target modules and parameters
 
         target_token_emb = self.token_emb[target_type]
         target_start_token = self.start_token[target_type]
         target_to_logit = self.to_logits[target_type]
         target_pad_id = self.pad_id[target_type]
+
+        # auto set eos id
+
+        if self.autoset_eos_id[source_type]:
+            source_eos_id = self.eos_id[source_type]
+            source = set_eos_id(source, source_eos_id, pad_id = source_pad_id)
+
+        if self.autoset_eos_id[target_type] and return_loss:
+            target_eos_id = self.eos_id[target_type]
+            target = set_eos_id(target, target_eos_id, pad_id = target_pad_id)
+
+        # if source mask is not passed in
+        # automatically derive by the padding id of the modality
+
+        if not exists(source_mask) and source.dtype == torch.long:
+            source_mask = source != source_pad_id
 
         # embedding
 
