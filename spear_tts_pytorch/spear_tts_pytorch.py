@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn, einsum
 from torch.nn import Module, ModuleList
 
-from einops import rearrange, repeat
+from einops import rearrange, repeat, pack
 
 from audiolm_pytorch import FairseqVQWav2Vec, HubertWithKmeans
 
@@ -13,6 +13,8 @@ from beartype.door import is_bearable
 from beartype.typing import Optional, Union, Callable, Literal, Tuple, List
 
 from x_clip.tokenizer import tokenizer
+
+from tqdm import tqdm
 
 # helpers
 
@@ -34,6 +36,45 @@ def set_eos_id(t: Tensor, eos_id: int, pad_id: int):
     t = F.pad(t, (0, 1), value = pad_id)
     t[batch_range, eos_indices] = eos_id
     return t
+
+# sampling helpers
+
+def eval_decorator(fn):
+    def inner(self, *args, **kwargs):
+        was_training = self.training
+        self.eval()
+        out = fn(self, *args, **kwargs)
+        self.train(was_training)
+        return out
+    return inner
+
+def log(t, eps = 1e-20):
+    return torch.log(t.clamp(min = eps))
+
+def gumbel_noise(t):
+    noise = torch.zeros_like(t).uniform_(0, 1)
+    return -log(-log(noise))
+
+def gumbel_sample(t, temperature = 1., dim = -1):
+    return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim)
+
+def top_p(logits, thres = 0.9):
+    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+    cum_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+
+    sorted_indices_to_remove = cum_probs > (1 - thres)
+    sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
+    sorted_indices_to_remove[:, 0] = 0
+
+    sorted_logits[sorted_indices_to_remove] = float('-inf')
+    return sorted_logits.scatter(1, sorted_indices, sorted_logits)
+
+def top_k(logits, thres = 0.9):
+    k = math.ceil((1 - thres) * logits.shape[-1])
+    val, ind = torch.topk(logits, k)
+    probs = torch.full_like(logits, float('-inf'))
+    probs.scatter_(1, ind, val)
+    return probs
 
 # t5 relative positional bias
 
@@ -361,6 +402,100 @@ class TextToSemantic(Module):
             cross_attend = True
         )
 
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
+    @torch.no_grad()
+    @eval_decorator
+    @beartype
+    def generate(
+        self,
+        source: Union[List[str], Tensor],
+        *,
+        source_type: SpeechOrTextLiteral,
+        target_type: SpeechOrTextLiteral,
+        temperature = 1.,
+        filter_logits_fn = top_k,
+        filter_thres = 0.9,
+        source_mask: Optional[Tensor] = None,
+        max_length = 2048
+    ):
+        if is_bearable(source, List[str]):
+            assert exists(self.tokenizer_encode)
+            source = self.tokenizer_encode(source)
+            source = source.to(self.device)
+
+        batch = source.shape[0]
+
+        source_token_emb = self.token_emb[source_type]
+        source_pad_id = self.pad_id[source_type]
+
+        # all target modules and parameters
+
+        target_token_emb = self.token_emb[target_type]
+        target_start_token = self.start_token[target_type]
+        target_to_logit = self.to_logits[target_type]
+        target_pad_id = self.pad_id[target_type]
+        target_eos_id = self.eos_id[target_type]
+
+        # auto set eos id
+
+        if self.autoset_eos_id[source_type]:
+            source_eos_id = self.eos_id[source_type]
+            source = set_eos_id(source, source_eos_id, pad_id = source_pad_id)
+
+        # if source mask is not passed in
+        # automatically derive by the padding id of the modality
+
+        if not exists(source_mask) and source.dtype == torch.long:
+            source_mask = source != source_pad_id
+
+        # source embedding
+
+        source_emb = source_token_emb(source)
+
+        source_emb = self.source_transformer(source_emb, mask = source_mask)
+
+        # decode target
+
+        target = torch.empty((batch, 0), dtype = torch.long, device = self.device)
+        start_token = repeat(target_start_token, 'd -> b 1 d', b = batch)
+
+        # loop to decode
+
+        for _ in tqdm(range(max_length)):
+            target_emb = target_token_emb(target)
+            target_emb = torch.cat((start_token, target_emb), dim = 1)
+
+            # target attention
+
+            target_emb = self.target_transformer(target_emb, context = source_emb, context_mask = source_mask)
+
+            # decoder logits
+
+            logits = target_to_logit(target_emb)
+
+            logits = logits[:, -1]
+            logits = filter_logits_fn(logits, thres = filter_thres)
+
+            sampled = gumbel_sample(logits, temperature = temperature)
+            target, _ = pack((target, sampled), 'b *')
+
+            if not self.autoset_eos_id[target_type]:
+                continue
+
+            is_eos = target == target_eos_id
+
+            if not is_eos.any(dim = -1).all():
+                continue
+
+            mask = is_eos.cumsum(dim = -1) == 0
+            target = target.masked_fill(~mask, target_pad_id)
+            break
+
+        return target
+
     @beartype
     def forward(
         self,
@@ -375,10 +510,12 @@ class TextToSemantic(Module):
         if is_bearable(source, List[str]):
             assert exists(self.tokenizer_encode)
             source = self.tokenizer_encode(source)
+            source = source.to(self.device)
 
         if is_bearable(target, List[str]):
             assert exists(self.tokenizer_encode)
             target = self.tokenizer_encode(target)
+            target = target.to(self.device)
 
         assert source.shape[0] == target.shape[0]
         batch = source.shape[0]

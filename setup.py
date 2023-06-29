@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'spear-tts-pytorch',
   packages = find_packages(exclude=[]),
-  version = '0.0.4',
+  version = '0.0.5',
   license='MIT',
   description = 'Spear-TTS - Pytorch',
   author = 'Phil Wang',
@@ -22,6 +22,7 @@ setup(
     'beartype',
     'einops>=0.6.1',
     'torch>=1.6',
+    'tqdm',
     'x-clip>=0.12.2'
   ],
   classifiers=[
