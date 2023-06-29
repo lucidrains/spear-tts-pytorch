@@ -9,7 +9,10 @@ from einops import rearrange, repeat
 from audiolm_pytorch import FairseqVQWav2Vec, HubertWithKmeans
 
 from beartype import beartype
-from beartype.typing import Optional, Union, Callable, Literal, Tuple
+from beartype.door import is_bearable
+from beartype.typing import Optional, Union, Callable, Literal, Tuple, List
+
+from x_clip.tokenizer import tokenizer
 
 # helpers
 
@@ -18,6 +21,9 @@ def exists(val):
 
 def default(val, d):
     return val if exists(val) else d
+
+def empty(t: Tensor):
+    return t.numel() == 0
 
 # t5 relative positional bias
 
@@ -247,6 +253,7 @@ class TextToSemantic(Module):
         source_depth,
         target_depth,
         tokenizer_encode: Optional[Callable] = None,
+        use_openai_tokenizer = False,
         wav2vec: Optional[Union[FairseqVQWav2Vec, HubertWithKmeans]] = None,
         num_semantic_token_ids = None,
         dim_head = 64,
@@ -259,6 +266,10 @@ class TextToSemantic(Module):
         self.wav2vec = wav2vec
 
         self.tokenizer_encode = tokenizer_encode
+
+        if use_openai_tokenizer:
+            assert not exists(tokenizer_encode)
+            self.tokenizer_encode = tokenizer.tokenize
 
         num_semantic_token_ids = wav2vec.codebook_size if exists(wav2vec) else num_semantic_token_ids
         assert exists(num_semantic_token_ids), 'you need to either pass in a wav2vec model from audiolm-pytorch, or specify the number of semantic token ids with num_semantic_token_ids'
@@ -329,14 +340,23 @@ class TextToSemantic(Module):
     @beartype
     def forward(
         self,
-        source: Tensor,
-        target: Tensor,
+        source: Union[List[str], Tensor],
+        target: Union[List[str], Tensor],
         *,
         source_type: SpeechOrTextLiteral,
         target_type: SpeechOrTextLiteral,
         source_mask: Optional[Tensor] = None,
         return_loss = False
     ):
+        if is_bearable(source, List[str]):
+            assert exists(self.tokenizer_encode)
+            source = self.tokenizer_encode(source)
+
+        if is_bearable(target, List[str]):
+            assert exists(self.tokenizer_encode)
+            target = self.tokenizer_encode(target)
+
+        assert source.shape[0] == target.shape[0]
         batch = source.shape[0]
 
         source_token_emb = self.token_emb[source_type]
@@ -378,6 +398,8 @@ class TextToSemantic(Module):
 
         if not return_loss:
             return logits
+
+        assert not empty(target)
 
         loss = F.cross_entropy(
             rearrange(logits[:, :-1], 'b n c -> b c n'),
