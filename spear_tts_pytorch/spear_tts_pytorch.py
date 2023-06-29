@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn, einsum
@@ -401,6 +402,12 @@ class TextToSemantic(Module):
             causal = True,
             cross_attend = True
         )
+
+    def load(self, path, strict = True):
+        path = Path(path)
+        assert path.exists()
+        pkg = torch.load(str(path), map_location = 'cpu')
+        self.load_state_dict(pkg, strict = strict)
 
     @property
     def device(self):
