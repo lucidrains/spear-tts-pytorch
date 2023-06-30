@@ -295,6 +295,11 @@ SpeechOrTextLiteral = Union[
     Literal['text']
 ]
 
+SemanticModelType = Union[
+    FairseqVQWav2Vec,
+    HubertWithKmeans
+]
+
 class TextToSemantic(Module):
     @beartype
     def __init__(
@@ -306,7 +311,7 @@ class TextToSemantic(Module):
         target_depth,
         tokenizer_encode: Optional[Callable] = None,
         use_openai_tokenizer = False,
-        wav2vec: Optional[Union[FairseqVQWav2Vec, HubertWithKmeans]] = None,
+        wav2vec: Optional[SemanticModelType] = None,
         num_semantic_token_ids = None,
         dim_head = 64,
         heads = 8,
@@ -579,10 +584,74 @@ class TextToSemantic(Module):
 
         assert not empty(target)
 
+        logits = rearrange(logits[:, :-1], 'b n c -> b c n')
+
         loss = F.cross_entropy(
-            rearrange(logits[:, :-1], 'b n c -> b c n'),
+            logits,
             target,
             ignore_index = target_pad_id
+        )
+
+        return loss
+
+# pretraining modules
+
+def get_mask_subset_prob(mask, prob, min_mask = 0):
+    batch, seq, device = *mask.shape, mask.device
+    num_to_mask = (mask.sum(dim = -1, keepdim = True) * prob).clamp(min = min_mask)
+    logits = torch.rand((batch, seq), device = device)
+    logits = logits.masked_fill(~mask, -1)
+
+    randperm = logits.argsort(dim = -1).float()
+
+    num_padding = (~mask).sum(dim = -1, keepdim = True)
+    randperm -= num_padding
+
+    subset_mask = randperm < num_to_mask
+    subset_mask.masked_fill_(~mask, False)
+    return subset_mask
+
+class SpeechSpeechPretrainWrapper(nn.Module):
+    @beartype
+    def __init__(
+        self,
+        model: TextToSemantic,
+        wav2vec: Optional[SemanticModelType] = None,
+        deletion_prob: float = 0.6
+    ):
+        super().__init__()
+
+        self.model = model
+        self.wav2vec = default(wav2vec, model.wav2vec)
+        assert exists(self.wav2vec)
+
+        self.deletion_prob = deletion_prob
+
+    def forward(
+        self,
+        x
+    ):
+        is_raw_audio = x.dtype == torch.float
+
+        if is_raw_audio:
+            with torch.no_grad():
+                self.wav2vec.eval()
+                x = self.wav2vec(x, flatten = False)
+
+        batch = x.shape[0]
+
+        mask = torch.ones_like(x, dtype = torch.bool, device = self.model.device)
+
+        delete_mask = get_mask_subset_prob(mask, self.deletion_prob)
+
+        source = rearrange(x[~delete_mask], '(b n) -> b n', b = batch)
+        target = rearrange(x[delete_mask], '(b n) -> b n', b = batch)
+
+        loss = self.model(
+            source, target,
+            source_type = 'speech',
+            target_type = 'speech',
+            return_loss = True
         )
 
         return loss
