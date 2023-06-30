@@ -161,12 +161,13 @@ class GEGLU(nn.Module):
         x, gate = x.chunk(2, dim = -1)
         return F.gelu(gate) * x
 
-def FeedForward(dim, mult = 4):
+def FeedForward(dim, mult = 4, dropout = 0.):
     dim_inner = int(dim * mult * 2 / 3)
     return nn.Sequential(
         RMSNorm(dim),
         nn.Linear(dim, dim_inner * 2),
         GEGLU(),
+        nn.Dropout(dropout),
         nn.Linear(dim_inner, dim)
     )
 
@@ -179,7 +180,8 @@ class Attention(nn.Module):
         *,
         dim_head = 64,
         heads = 8,
-        causal = False
+        causal = False,
+        dropout = 0.
     ):
         super().__init__()
         self.heads = heads
@@ -189,6 +191,7 @@ class Attention(nn.Module):
         self.causal = causal
 
         self.norm = RMSNorm(dim)
+        self.attn_dropout = nn.Dropout(dropout)
 
         self.to_q = nn.Linear(dim, dim_inner, bias = False)
         self.to_kv = nn.Linear(dim, dim_inner * 2, bias = False)
@@ -226,6 +229,7 @@ class Attention(nn.Module):
             sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
 
         attn = sim.softmax(dim = -1)
+        attn = self.attn_dropout(attn)
 
         out = einsum('b h i j, b h j d -> b h i d', attn, v)
 
@@ -243,7 +247,9 @@ class Transformer(nn.Module):
         dim_head = 64,
         heads = 8,
         causal = False,
+        attn_dropout = 0.,
         ff_mult = 4,
+        ff_dropout = 0.,
         cross_attend = False
     ):
         super().__init__()
@@ -258,9 +264,9 @@ class Transformer(nn.Module):
 
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                Attention(dim = dim, causal = causal, dim_head = dim_head, heads = heads),
-                Attention(dim = dim, dim_head = dim_head, heads = heads) if cross_attend else None,
-                FeedForward(dim = dim, mult = ff_mult)
+                Attention(dim = dim, causal = causal, dim_head = dim_head, heads = heads, dropout = attn_dropout),
+                Attention(dim = dim, dim_head = dim_head, heads = heads, dropout = attn_dropout) if cross_attend else None,
+                FeedForward(dim = dim, mult = ff_mult, dropout = ff_dropout)
             ]))
 
         self.final_norm = RMSNorm(dim)
@@ -315,6 +321,8 @@ class TextToSemantic(Module):
         num_semantic_token_ids = None,
         dim_head = 64,
         heads = 8,
+        attn_dropout = 0.,
+        ff_dropout = 0.,
         semantic_pad_id = -1,
         text_pad_id = 0,
         autoset_semantic_eos_id = True,
@@ -396,6 +404,8 @@ class TextToSemantic(Module):
             dim_head = dim_head,
             heads = heads,
             depth = source_depth,
+            attn_dropout = attn_dropout,
+            ff_dropout = ff_dropout,
             causal = False
         )
 
@@ -404,6 +414,8 @@ class TextToSemantic(Module):
             dim_head = dim_head,
             heads = heads,
             depth = source_depth,
+            attn_dropout = attn_dropout,
+            ff_dropout = ff_dropout,
             causal = True,
             cross_attend = True
         )

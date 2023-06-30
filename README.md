@@ -14,11 +14,11 @@ The text-to-semantic module built here will be used for <a href="https://github.
 
 - [x] add eos logic + generate, and hook up end-to-end generation in soundstorm
 - [x] add first pretraining speech-to-speech with the reconstruction of 60% deleted tokens
+- [x] add dropouts for this project, as low-resource
 
 - [ ] add total flexiblity of which layers of encoder / decoder to freeze during training
 - [ ] add step for training on small speech -> text corpus and generating pseudo-labelled dataset + finetuning
 - [ ] add final step of finetuning on text -> speech + pseudolabelled dataset
-- [ ] add dropouts for this project, as low-resource
 
 ## Citations
 
