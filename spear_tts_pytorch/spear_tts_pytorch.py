@@ -390,7 +390,7 @@ class TextToSemantic(Module):
         to_text_logit = nn.Linear(dim, num_text_token_ids, bias = False)
 
         to_semantic_logit.weight = semantic_token_emb.weight
-        to_text_logit.weight = to_text_logit.weight
+        to_text_logit.weight = text_token_emb.weight
 
         self.to_logits = nn.ModuleDict(dict(
             speech = to_semantic_logit,
