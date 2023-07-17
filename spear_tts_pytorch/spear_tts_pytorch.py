@@ -629,7 +629,8 @@ class SpeechSpeechPretrainWrapper(nn.Module):
         self,
         model: TextToSemantic,
         wav2vec: Optional[SemanticModelType] = None,
-        deletion_prob: float = 0.6
+        deletion_prob: float = 0.6,
+        reconstruct_seq: bool = False
     ):
         super().__init__()
 
@@ -638,6 +639,7 @@ class SpeechSpeechPretrainWrapper(nn.Module):
         assert exists(self.wav2vec)
 
         self.deletion_prob = deletion_prob
+        self.reconstruct_seq = reconstruct_seq # whether to reconstruct the entire sequence, or just output the deleted ones in order
 
     def forward(
         self,
@@ -657,7 +659,11 @@ class SpeechSpeechPretrainWrapper(nn.Module):
         delete_mask = get_mask_subset_prob(mask, self.deletion_prob)
 
         source = rearrange(x[~delete_mask], '(b n) -> b n', b = batch)
-        target = rearrange(x[delete_mask], '(b n) -> b n', b = batch)
+
+        if self.reconstruct_seq:
+            target = x
+        else:
+            target = rearrange(x[delete_mask], '(b n) -> b n', b = batch)
 
         loss = self.model(
             source, target,
