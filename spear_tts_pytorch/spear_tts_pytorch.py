@@ -322,6 +322,7 @@ class TextToSemantic(Module):
         dim_head = 64,
         heads = 8,
         attn_dropout = 0.,
+        ff_mult = 2,
         ff_dropout = 0.,
         semantic_pad_id = -1,
         text_pad_id = 0,
@@ -405,6 +406,7 @@ class TextToSemantic(Module):
             heads = heads,
             depth = source_depth,
             attn_dropout = attn_dropout,
+            ff_mult = ff_mult,
             ff_dropout = ff_dropout,
             causal = False
         )
@@ -415,6 +417,7 @@ class TextToSemantic(Module):
             heads = heads,
             depth = source_depth,
             attn_dropout = attn_dropout,
+            ff_mult = ff_mult,
             ff_dropout = ff_dropout,
             causal = True,
             cross_attend = True
