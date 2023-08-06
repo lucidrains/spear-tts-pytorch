@@ -1,4 +1,3 @@
-from contextlib import contextmanager
 import math
 from pathlib import Path
 import torch
@@ -30,10 +29,6 @@ def default(val, d):
 def empty(t: Tensor):
     return t.numel() == 0
 
-@contextmanager
-def null_context():
-    yield
-    
 def set_eos_id(t: Tensor, eos_id: int, pad_id: int):
     eos_indices = ((t == pad_id).cumsum(dim = -1) == 0).sum(dim = -1, keepdim = True).long()
 
@@ -47,6 +42,12 @@ def set_eos_id(t: Tensor, eos_id: int, pad_id: int):
 def batch_unique_consecutive(t, pad_value = 0.):
     unique_arr = [torch.unique_consecutive(el) for el in t.unbind(dim = 0)]
     return pad_sequence(unique_arr, batch_first = True, padding_value = pad_value)
+
+# freezing and unfreezing helpers
+
+def set_requires_grad_(module: Module, freeze: bool):
+    for p in module.parameters():
+        p.requires_grad = freeze
 
 # sampling helpers
 
@@ -304,22 +305,6 @@ class Transformer(nn.Module):
 
         return self.final_norm(x)
 
-def model_forward_with_context(
-    *,
-    fn,
-    args,
-    freeze,
-):
-    encoding_context = null_context if not freeze else torch.no_grad
-
-    with encoding_context():
-        enc = fn(*args)
-
-        if freeze:
-            enc.detach_()
-
-    return enc
-
 # class
 
 SpeechOrTextLiteral = Union[
@@ -353,8 +338,7 @@ class TextToSemantic(Module):
         semantic_pad_id = -1,
         text_pad_id = 0,
         autoset_semantic_eos_id = True,
-        autoset_text_eos_id = True,
-        freeze_encoder = False
+        autoset_text_eos_id = True
     ):
         super().__init__()
         self.dim = dim
@@ -449,8 +433,10 @@ class TextToSemantic(Module):
             causal = True,
             cross_attend = True
         )
-        
-        self.freeze_encoder = freeze_encoder
+
+    @property
+    def device(self):
+        return next(self.parameters()).device
 
     def load(self, path, strict = True):
         # Return pkg so that if this function gets called from within a Trainer function call,
@@ -461,9 +447,40 @@ class TextToSemantic(Module):
         self.load_state_dict(pkg['model'], strict = strict)
         return pkg
 
-    @property
-    def device(self):
-        return next(self.parameters()).device
+    # a set of freezing / unfreezing utils
+    # then rely on get_optimizer to filter out the parameters that do not require grad from being exposed to optimizer
+
+    def unfreeze_all(self):
+        set_requires_grad_(self, True)
+
+    def freeze_encoder(self):
+        set_requires_grad_(self.source_transformer, False)
+
+    def freeze_encoder_below_layer(self, layer: int):
+        """
+        for the final training of text-to-semantic on pseudo-labelled dataset
+        they freeze the encoder part way up to a certain layer
+        """
+        set_requires_grad_(self.source_transformer, True)
+
+        for ind, module in enumerate(self.source_transformer.layers):
+            current_layer = ind + 1
+
+            if current_layer <= layer:
+                set_requires_grad_(module, False)
+
+    def freeze_decoder(self):
+        set_requires_grad_(self.target_transformer, False)
+
+    def freeze_speech_emb(self):
+        set_requires_grad_(self.token_emb['speech'], False)
+        self.start_token['speech'].requires_grad = False
+
+    def freeze_text_emb(self):
+        set_requires_grad_(self.token_emb['text'], False)
+        self.start_token['text'].requires_grad = False
+
+    # sampling function
 
     @torch.no_grad()
     @eval_decorator
@@ -663,11 +680,7 @@ class TextToSemantic(Module):
 
         # source attention
 
-        source_emb = model_forward_with_context(
-            fn = self.source_transformer,
-            args = (source_emb, source_mask),
-            freeze = self.freeze_encoder
-        )
+        source_emb = self.source_transformer(source_emb, source_mask)
 
         # target attention
 
