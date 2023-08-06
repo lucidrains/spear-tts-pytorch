@@ -663,7 +663,7 @@ class TextToSemantic(Module):
 
         # source attention
 
-        model_forward_with_context(
+        source_emb = model_forward_with_context(
             fn = self.source_transformer,
             args = (source_emb, source_mask),
             freeze = self.freeze_encoder
@@ -789,4 +789,3 @@ class SemanticToTextWrapper(nn.Module):
         )
 
         return loss
-
