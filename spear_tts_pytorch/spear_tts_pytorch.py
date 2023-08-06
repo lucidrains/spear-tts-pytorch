@@ -45,9 +45,15 @@ def batch_unique_consecutive(t, pad_value = 0.):
 
 # freezing and unfreezing helpers
 
-def set_requires_grad_(module: Module, freeze: bool):
+def set_requires_grad_(module: Module, requires_grad: bool):
     for p in module.parameters():
-        p.requires_grad = freeze
+        p.requires_grad = requires_grad
+
+def freeze(module: Module):
+    set_requires_grad_(module, False)
+
+def unfreeze(module: Module):
+    set_requires_grad_(module, True)
 
 # sampling helpers
 
@@ -451,33 +457,33 @@ class TextToSemantic(Module):
     # then rely on get_optimizer to filter out the parameters that do not require grad from being exposed to optimizer
 
     def unfreeze_all(self):
-        set_requires_grad_(self, True)
+        unfreeze(self)
 
     def freeze_encoder(self):
-        set_requires_grad_(self.source_transformer, False)
+        freeze(self.source_transformer)
 
     def freeze_encoder_below_layer(self, layer: int):
         """
         for the final training of text-to-semantic on pseudo-labelled dataset
         they freeze the encoder part way up to a certain layer
         """
-        set_requires_grad_(self.source_transformer, True)
+        unfreeze(self.source_transformer)
 
         for ind, module in enumerate(self.source_transformer.layers):
             current_layer = ind + 1
 
             if current_layer <= layer:
-                set_requires_grad_(module, False)
+                freeze(module)
 
     def freeze_decoder(self):
-        set_requires_grad_(self.target_transformer, False)
+        freeze(self.target_transformer)
 
     def freeze_speech_emb(self):
-        set_requires_grad_(self.token_emb['speech'], False)
+        freeze(self.token_emb['speech'])
         self.start_token['speech'].requires_grad = False
 
     def freeze_text_emb(self):
-        set_requires_grad_(self.token_emb['text'], False)
+        freeze(self.token_emb['text'])
         self.start_token['text'].requires_grad = False
 
     # sampling function
