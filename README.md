@@ -10,6 +10,8 @@ The text-to-semantic module built here will be used for <a href="https://github.
 
 - <a href="https://stability.ai/">Stability</a> and <a href="https://huggingface.co/">🤗 Huggingface</a> for their generous sponsorships to work on and open source cutting edge artificial intelligence research
 
+- <a href="https://github.com/lucasnewman">Lucas Newman</a> for completing the <a href="https://github.com/lucidrains/spear-tts-pytorch/pull/4">backtranslation</a> portion, as well as beam search decoding!
+
 ## Todo
 
 - [x] add eos logic + generate, and hook up end-to-end generation in soundstorm
