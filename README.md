@@ -10,14 +10,17 @@ The text-to-semantic module built here will be used for <a href="https://github.
 
 - <a href="https://stability.ai/">Stability</a> and <a href="https://huggingface.co/">🤗 Huggingface</a> for their generous sponsorships to work on and open source cutting edge artificial intelligence research
 
+- <a href="https://github.com/lucasnewman">Lucas Newman</a> for completing the <a href="https://github.com/lucidrains/spear-tts-pytorch/pull/4">backtranslation</a> portion, as well as beam search decoding!
+
 ## Todo
 
 - [x] add eos logic + generate, and hook up end-to-end generation in soundstorm
 - [x] add first pretraining speech-to-speech with the reconstruction of 60% deleted tokens
 - [x] add dropouts for this project, as low-resource
+- [x] add total flexiblity of which layers of encoder / decoder to freeze during training
+- [x] add step for training on small speech -> text corpus and generating pseudo-labelled dataset + finetuning (thanks to @lucasnewman)
 
-- [ ] add total flexiblity of which layers of encoder / decoder to freeze during training
-- [ ] add step for training on small speech -> text corpus and generating pseudo-labelled dataset + finetuning
+- [ ] figure out the best way to store and manage the pseudo-labelled generated dataset
 - [ ] add final step of finetuning on text -> speech + pseudolabelled dataset
 
 ## Citations

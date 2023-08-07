@@ -359,10 +359,26 @@ class SemanticToTextTrainer(nn.Module):
         self.batch_size = batch_size
         self.grad_accum_every = grad_accum_every
 
+        # when doing backtranslation
+        # encoder is frozen (and presumably all the speech embeddings)
+
+        model.unfreeze_all()
+        model.freeze_speech_emb()
+        model.freeze_encoder()
+
         # optimizers
+        # get_optimizer should filter out frozen parameters (ones with requires_grad set to False)
+        # https://github.com/lucidrains/audiolm-pytorch/blob/main/audiolm_pytorch/optimizer.py#L24
+
+        self.optim = get_optimizer(
+            model.parameters(),
+            lr = lr,
+            wd = wd,
+            filter_by_requires_grad = True
+        )
+
         self.lr = lr
         self.initial_lr = initial_lr
-        self.optim = get_optimizer(model.parameters(), lr = lr, wd = wd)
         self.scheduler = CosineAnnealingLR(self.optim, T_max = num_train_steps)
 
         # max grad norm
