@@ -12,6 +12,8 @@ The text-to-semantic module built here will be used for <a href="https://github.
 
 - <a href="https://github.com/lucasnewman">Lucas Newman</a> for completing the <a href="https://github.com/lucidrains/spear-tts-pytorch/pull/4">backtranslation</a> portion, as well as beam search decoding!
 
+- <a href="https://github.com/lucasnewman">Lucas Newman</a> for completing the final text to semantic transformer training code!
+
 ## Todo
 
 - [x] add eos logic + generate, and hook up end-to-end generation in soundstorm
@@ -19,9 +21,10 @@ The text-to-semantic module built here will be used for <a href="https://github.
 - [x] add dropouts for this project, as low-resource
 - [x] add total flexiblity of which layers of encoder / decoder to freeze during training
 - [x] add step for training on small speech -> text corpus and generating pseudo-labelled dataset + finetuning (thanks to @lucasnewman)
+- [x] add final step of finetuning on text -> speech + pseudolabelled dataset
 
 - [ ] figure out the best way to store and manage the pseudo-labelled generated dataset
-- [ ] add final step of finetuning on text -> speech + pseudolabelled dataset
+- [ ] see if one can speed up text-to-semantic transformer with NAR (perhaps maskgit style, or some AR / NAR hybrid)
 
 ## Citations
 
