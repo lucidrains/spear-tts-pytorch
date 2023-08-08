@@ -808,3 +808,32 @@ class SemanticToTextWrapper(nn.Module):
         )
 
         return loss
+
+# wrapper for text to semantic task
+
+class TextToSemanticWrapper(nn.Module):
+    @beartype
+    def __init__(
+        self,
+        model: TextToSemantic
+    ):
+        super().__init__()
+
+        self.model = model
+
+    def forward(
+        self,
+        grapheme_token_ids,
+        semantic_token_ids,
+    ):
+        source = grapheme_token_ids
+        target = semantic_token_ids
+
+        loss = self.model(
+            source, target,
+            source_type = 'text',
+            target_type = 'speech',
+            return_loss = True
+        )
+
+        return loss
