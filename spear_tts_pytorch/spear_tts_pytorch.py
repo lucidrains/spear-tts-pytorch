@@ -7,9 +7,12 @@ from torch.nn.utils.rnn import pad_sequence
 from torch import Tensor, nn, einsum, FloatTensor, IntTensor, LongTensor
 from torch.nn import Module, ModuleList
 
+from torch.utils.data import Dataset
+
 from einops import rearrange, repeat, pack
 
 from audiolm_pytorch import FairseqVQWav2Vec, HubertWithKmeans
+from audiolm_pytorch.data import get_dataloader
 
 from beartype import beartype
 from beartype.door import is_bearable
@@ -850,3 +853,50 @@ class TextToSemanticWrapper(nn.Module):
         )
 
         return loss
+
+# wrapper for generating the pseudo-labelled audio to text dataset
+
+class SemanticToTextDatasetGenerator(nn.Module):
+    @beartype
+    def __init__(
+        self,
+        model,
+        *,
+        dataset: Dataset,
+        folder = './generated-audio-text-pairs',
+        batch_size = 4,
+        delimiter_id: int = -1
+    ):
+        super().__init__()
+        self.model = model
+
+        self.dataset = dataset
+        self.dl = get_dataloader(dataset, batch_size = batch_size)
+        self.delimiter_id = delimiter_id
+
+        self.folder = Path(folder)
+        self.folder.mkdir(exist_ok = True, parents = True)
+
+    def forward(
+        self,
+        max_length = 2048
+    ):
+        delimiter = torch.tensor([self.delimiter_id], device = self.model.device)
+
+        counter = 0
+
+        for audio, in self.dl:
+            audio_semantic_ids, text_ids = self.model.generate(
+                source = audio,
+                source_type = 'speech',
+                target_type = 'text',
+                return_source = True,
+                max_length = max_length
+            )
+
+            for audio_semantic_id, text_id in zip(audio_semantic_ids, text_ids):
+                row, _ = pack([audio_semantic_id, delimiter, text_id], '*')
+                path = str(self.folder / f'{counter}.pt')
+
+                torch.save(row, path)
+                counter += 1
