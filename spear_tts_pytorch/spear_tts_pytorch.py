@@ -1,9 +1,10 @@
 import math
 from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-from torch import Tensor, nn, einsum
+from torch import Tensor, nn, einsum, FloatTensor, IntTensor, LongTensor
 from torch.nn import Module, ModuleList
 
 from einops import rearrange, repeat, pack
@@ -504,7 +505,12 @@ class TextToSemantic(Module):
         max_length = 2048,
         beam_search_decode = False,
         beam_size = 4,
+        return_source = False
     ):
+        if isinstance(source, (FloatTensor)) and source_type == 'speech':
+            assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
+            source = self.wav2vec(source)
+
         if is_bearable(source, List[str]):
             assert exists(self.tokenizer_encode)
             source = self.tokenizer_encode(source)
@@ -616,7 +622,10 @@ class TextToSemantic(Module):
                 
             target = beam[0][0]
 
-        return target
+        if not return_source:
+            return target
+
+        return source, target
 
     @beartype
     def forward(
@@ -630,6 +639,10 @@ class TextToSemantic(Module):
         target_mask: Optional[Tensor] = None,
         return_loss = False
     ):
+        if isinstance(source, FloatTensor) and source_type == 'speech':
+            assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
+            source = self.wav2vec(source)
+
         if is_bearable(source, List[str]):
             assert exists(self.tokenizer_encode)
             source = self.tokenizer_encode(source)

@@ -28,7 +28,6 @@ def check_one_trainer():
     assert not ONE_TRAINER_INSTANTIATED, 'only one Trainer can be instantiated at a time for training'
     ONE_TRAINER_INSTANTIATED = True
 
-
 # helpers
 
 def exists(val):
