@@ -48,6 +48,11 @@ def batch_unique_consecutive(t, pad_value = 0.):
     unique_arr = [torch.unique_consecutive(el) for el in t.unbind(dim = 0)]
     return pad_sequence(unique_arr, batch_first = True, padding_value = pad_value)
 
+def mask_after_eos(target, eos_id, pad_id):
+    mask = (target == eos_id).cumsum(dim = -1) > 0
+    mask = F.pad(mask, (1, -1), value = False)
+    return target.masked_fill(mask, pad_id)
+
 # freezing and unfreezing helpers
 
 def set_requires_grad_(module: Module, requires_grad: bool):
@@ -582,12 +587,12 @@ class TextToSemantic(Module):
                     continue
 
                 is_eos = target == target_eos_id
+                all_eos = is_eos.any(dim = -1).all()
 
-                if not is_eos.any(dim = -1).all():
+                if not all_eos:
                     continue
 
-                mask = is_eos.cumsum(dim = -1) == 0
-                target = target.masked_fill(~mask, target_pad_id)
+                target = mask_after_eos(target, target_eos_id, target_pad_id)
                 break
         else:
             beam = [(target, 0.0)]
@@ -640,10 +645,13 @@ class TextToSemantic(Module):
 
                 all_eos = all([((sentence == target_eos_id).any(dim = -1)).all() for sentence, _ in beam])
 
-                if not all_eos:
-                    continue
-                
+                if all_eos:
+                    break
+
             target = beam[0][0]
+
+            if exists(target_eos_id):
+                target = mask_after_eos(target, target_eos_id, target_pad_id)
 
         if not return_source:
             return target
