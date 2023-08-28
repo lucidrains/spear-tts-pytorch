@@ -893,7 +893,9 @@ class SemanticToTextDatasetGenerator(nn.Module):
         dataset: Dataset,
         folder = './generated-audio-text-pairs',
         batch_size = 4,
-        delimiter_id: int = -1
+        delimiter_id: int = -1,
+        audio_pad_id = None,
+        text_pad_id = 0
     ):
         super().__init__()
         self.model = model
@@ -901,6 +903,9 @@ class SemanticToTextDatasetGenerator(nn.Module):
         self.dataset = dataset
         self.dl = get_dataloader(dataset, batch_size = batch_size)
         self.delimiter_id = delimiter_id
+
+        self.audio_pad_id = audio_pad_id
+        self.text_pad_id = text_pad_id
 
         self.folder = Path(folder)
         self.folder.mkdir(exist_ok = True, parents = True)
@@ -927,6 +932,15 @@ class SemanticToTextDatasetGenerator(nn.Module):
             )
 
             for audio_semantic_id, text_id in zip(audio_semantic_ids, text_ids):
+
+                if exists(self.audio_pad_id):
+                    audio_pad_mask = audio_semantic_id == self.audio_pad_id
+                    audio_semantic_id = audio_semantic_id[~audio_pad_mask]
+
+                if exists(self.text_pad_id):
+                    text_pad_mask = text_id == self.text_pad_id
+                    text_id = text_id[~text_pad_mask]
+
                 row, _ = pack([audio_semantic_id, delimiter, text_id], '*')
                 path = str(self.folder / f'{counter}.pt')
 
