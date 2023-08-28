@@ -73,9 +73,9 @@ assert len(generated_dataset) == 10
 - [x] add step for training on small speech -> text corpus and generating pseudo-labelled dataset + finetuning (thanks to @lucasnewman)
 - [x] add final step of finetuning on text -> speech + pseudolabelled dataset
 - [x] figure out the best way to store and manage the pseudo-labelled generated dataset
+- [x] batched beam search decoding
 
 - [ ] polish the audio-text generation workflow
-- [ ] investigate beam search decode error
 - [ ] concatting the real audio-text dataset with the generated one -> or being able to convert real audio-text dataset to generated
 - [ ] see if one can speed up text-to-semantic transformer with NAR (perhaps maskgit style, or some AR / NAR hybrid) - also start toying around with speculative decoding
 

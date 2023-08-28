@@ -1,5 +1,6 @@
 import math
 from pathlib import Path
+from functools import partial
 
 import torch
 import torch.nn.functional as F
@@ -590,7 +591,10 @@ class TextToSemantic(Module):
                 break
         else:
             beam = [(target, 0.0)]
-            
+
+            batch_range = torch.arange(batch, device = self.device, dtype = torch.long)
+            batch_range = rearrange(batch_range, 'b -> b 1')
+
             for _ in tqdm(range(max_length)):
                 all_candidates = []
                 
@@ -615,13 +619,29 @@ class TextToSemantic(Module):
                         candidate_prob = sentence_prob + topk_log_probs[..., i]
                         all_candidates.append((candidate, candidate_prob))
 
-                ordered = sorted(all_candidates, key = lambda tup: tup[1], reverse = True)
+                # concat into shape (beam, batch, seq), (beam, batch)
+
+                candidates, candidate_probs = map(partial(torch.stack, dim = 1), zip(*all_candidates))
+
+                # sort by candidate scores across beams
+
+                sorted_indices = candidate_probs.sort(dim = 1, descending = True).indices
+
+                sorted_candidates = candidates[batch_range, sorted_indices]
+                sorted_candidate_probs = candidate_probs[batch_range, sorted_indices]
+
+                # reconstitute ordered List[Tuple[Tensor, Tensor]]
+
+                ordered = list(zip(*map(partial(torch.unbind, dim = 1), (sorted_candidates, sorted_candidate_probs))))
+
                 beam = ordered[:beam_size]
                 
                 # check if we've hit eos for all sequences
+
                 all_eos = all([((sentence == target_eos_id).any(dim = -1)).all() for sentence, _ in beam])
-                if all_eos:
-                    break
+
+                if not all_eos:
+                    continue
                 
             target = beam[0][0]
 
