@@ -879,7 +879,9 @@ class SemanticToTextDatasetGenerator(nn.Module):
 
     def forward(
         self,
-        max_length = 2048
+        max_length = 2048,
+        beam_search_decode = False,
+        **generate_kwargs
     ):
         delimiter = torch.tensor([self.delimiter_id], device = self.model.device)
 
@@ -891,7 +893,9 @@ class SemanticToTextDatasetGenerator(nn.Module):
                 source_type = 'speech',
                 target_type = 'text',
                 return_source = True,
-                max_length = max_length
+                max_length = max_length,
+                beam_search_decode = beam_search_decode,
+                **generate_kwargs
             )
 
             for audio_semantic_id, text_id in zip(audio_semantic_ids, text_ids):
