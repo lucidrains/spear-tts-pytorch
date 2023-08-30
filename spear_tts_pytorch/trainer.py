@@ -7,6 +7,7 @@ from beartype.typing import Union, Optional
 
 import torch
 from torch import nn
+from torch.utils.data import ConcatDataset
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import Dataset, random_split
 
@@ -15,6 +16,7 @@ from audiolm_pytorch.data import get_dataloader
 from audiolm_pytorch.optimizer import get_optimizer
 
 from spear_tts_pytorch.spear_tts_pytorch import SpeechSpeechPretrainWrapper, TextToSemantic, SemanticToTextWrapper, TextToSemanticWrapper
+from spear_tts_pytorch.data import GeneratedAudioTextDataset
 
 from accelerate import Accelerator, DistributedType
 
@@ -574,6 +576,8 @@ class TextToSemanticTrainer(nn.Module):
         num_warmup_steps,
         batch_size,
         dataset: Optional[Dataset] = None,
+        generated_audio_text_dataset_folder = None,
+        dataset_delimiter_id = -1,
         data_max_length = None,
         lr = 3e-4,
         initial_lr = 1e-5,
@@ -639,7 +643,20 @@ class TextToSemanticTrainer(nn.Module):
 
         # create dataset
 
-        self.ds = dataset
+        datasets = [dataset]
+
+        if exists(generated_audio_text_dataset_folder):
+            pseudo_labelled_dataset = GeneratedAudioTextDataset(
+                folder = generated_audio_text_dataset_folder,
+                delimiter_id = dataset_delimiter_id
+            )
+
+            datasets.append(pseudo_labelled_dataset)
+
+        # concat the small labelled dataset with the pseudo-labelled dataset at the folder designated
+
+        datasets = list(filter(exists, datasets))
+        self.ds = ConcatDataset(datasets)
 
         # split for validation
 
