@@ -3,10 +3,11 @@ from pathlib import Path
 from shutil import rmtree
 
 from beartype import beartype
-from beartype.typing import Union, Optional
+from beartype.door import is_bearable
+from beartype.typing import Union, Optional, Tuple
 
 import torch
-from torch import nn
+from torch import nn, LongTensor, IntTensor
 from torch.utils.data import ConcatDataset
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import Dataset, random_split
@@ -20,6 +21,9 @@ from spear_tts_pytorch.data import GeneratedAudioTextDataset
 
 from accelerate import Accelerator, DistributedType
 
+# constants
+
+IndicesTensor = Union[LongTensor, IntTensor]
 
 # make sure only one trainer is instantiated
 
@@ -643,7 +647,11 @@ class TextToSemanticTrainer(nn.Module):
 
         # create dataset
 
-        datasets = [dataset]
+        datasets = []
+
+        if exists(dataset):
+            assert len(dataset) > 0 and is_bearable(dataset[0], Tuple[IndicesTensor, IndicesTensor]), 'audio-text dataset must return text and semantic token ids as a tuple of two tensors'
+            datasets.append(dataset)
 
         if exists(generated_audio_text_dataset_folder):
             pseudo_labelled_dataset = GeneratedAudioTextDataset(
@@ -655,7 +663,7 @@ class TextToSemanticTrainer(nn.Module):
 
         # concat the small labelled dataset with the pseudo-labelled dataset at the folder designated
 
-        datasets = list(filter(exists, datasets))
+        assert len(datasets) > 0
         self.ds = ConcatDataset(datasets)
 
         # split for validation
