@@ -86,10 +86,9 @@ class SpeechSpeechPretrainer(nn.Module):
         batch_size,
         dataset: Optional[Dataset] = None,
         data_max_length = None,
-        data_max_length_seconds = None,
         deletion_prob: float = 0.6,
         reconstruct_seq: bool = False,
-        folder = None,
+        mask_id = None,
         lr = 3e-4,
         initial_lr = 1e-5,
         grad_accum_every = 1,
@@ -97,6 +96,7 @@ class SpeechSpeechPretrainer(nn.Module):
         max_grad_norm = 0.5,
         valid_frac = 0.05,
         random_split_seed = 42,
+        log_every = 10,
         save_results_every = 100,
         save_model_every = 1000,
         results_folder = './results',
@@ -120,7 +120,8 @@ class SpeechSpeechPretrainer(nn.Module):
             model = model,
             wav2vec = wav2vec,
             deletion_prob = deletion_prob,
-            reconstruct_seq = reconstruct_seq
+            reconstruct_seq = reconstruct_seq,
+            mask_id = mask_id
         )
 
         self.register_buffer('steps', torch.Tensor([0]))
@@ -185,6 +186,7 @@ class SpeechSpeechPretrainer(nn.Module):
         self.dl_iter = cycle(self.dl)
         self.valid_dl_iter = cycle(self.valid_dl)
 
+        self.log_every = log_every
         self.save_model_every = save_model_every
         self.save_results_every = save_results_every
 
@@ -269,7 +271,7 @@ class SpeechSpeechPretrainer(nn.Module):
         for _ in range(self.grad_accum_every):
             x, = next(self.dl_iter)
 
-            loss = self.train_wrapper(x)
+            loss, _ = self.train_wrapper(x)
 
             self.accelerator.backward(loss / self.grad_accum_every)
 
@@ -283,7 +285,9 @@ class SpeechSpeechPretrainer(nn.Module):
 
         # log
 
-        self.print(f"{steps}: loss: {logs['loss']}")
+        if not (steps % self.log_every):
+            self.print(f"{steps}: loss: {logs['loss']:0.3f}}")
+
         self.accelerator.log({"train_loss": logs['loss']}, step=steps)
 
         # sample results every so often
@@ -297,7 +301,7 @@ class SpeechSpeechPretrainer(nn.Module):
                 self.train_wrapper.eval()
                 valid_loss = self.train_wrapper(x)
 
-            self.print(f'{steps}: valid loss {valid_loss}')
+            self.print(f'{steps}: valid loss {valid_loss:0.3f}')
             self.accelerator.log({"valid_loss": valid_loss}, step=steps)
 
         # save model every so often
@@ -337,6 +341,7 @@ class SemanticToTextTrainer(nn.Module):
         max_grad_norm = 0.5,
         valid_frac = 0.05,
         random_split_seed = 42,
+        log_every = 10,
         save_results_every = 100,
         save_model_every = 1000,
         results_folder = './results',
@@ -435,6 +440,7 @@ class SemanticToTextTrainer(nn.Module):
         self.dl_iter = cycle(self.dl)
         self.valid_dl_iter = cycle(self.valid_dl)
 
+        self.log_every = log_every
         self.save_model_every = save_model_every
         self.save_results_every = save_results_every
 
@@ -446,7 +452,7 @@ class SemanticToTextTrainer(nn.Module):
         self.results_folder.mkdir(parents = True, exist_ok = True)
         
         hps = {"num_train_steps": num_train_steps, "num_warmup_steps": num_warmup_steps, "data_max_length": data_max_length, "learning_rate": lr, "initial_learning_rate": lr}
-        self.accelerator.init_trackers("speechspeech", config=hps)
+        self.accelerator.init_trackers("semantictext", config=hps)
 
     def save(self, path):
         pkg = dict(
@@ -520,7 +526,7 @@ class SemanticToTextTrainer(nn.Module):
         for _ in range(self.grad_accum_every):
             semantic_token_ids, grapheme_token_ids = next(self.dl_iter)
 
-            loss = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
+            loss, _ = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
 
             self.accelerator.backward(loss / self.grad_accum_every)
 
@@ -534,7 +540,8 @@ class SemanticToTextTrainer(nn.Module):
 
         # log
 
-        self.print(f"{steps}: loss: {logs['loss']}")
+        if not (steps % self.log_every):
+            self.print(f"{steps}: loss: {logs['loss']:0.3f}")
         self.accelerator.log({"train_loss": logs['loss']}, step=steps)
 
         # sample results every so often
@@ -548,7 +555,7 @@ class SemanticToTextTrainer(nn.Module):
                 self.train_wrapper.eval()
                 valid_loss = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
 
-            self.print(f'{steps}: valid loss {valid_loss}')
+            self.print(f'{steps}: valid loss {valid_loss:0.3f}')
             self.accelerator.log({"valid_loss": valid_loss}, step=steps)
 
         # save model every so often
@@ -590,6 +597,7 @@ class TextToSemanticTrainer(nn.Module):
         max_grad_norm = 0.5,
         valid_frac = 0.05,
         random_split_seed = 42,
+        log_every = 10,
         save_results_every = 100,
         save_model_every = 1000,
         results_folder = './results',
@@ -709,6 +717,7 @@ class TextToSemanticTrainer(nn.Module):
 
         self.save_model_every = save_model_every
         self.save_results_every = save_results_every
+        self.log_every = log_every
 
         self.results_folder = Path(results_folder)
 
@@ -718,7 +727,7 @@ class TextToSemanticTrainer(nn.Module):
         self.results_folder.mkdir(parents = True, exist_ok = True)
         
         hps = {"num_train_steps": num_train_steps, "num_warmup_steps": num_warmup_steps, "data_max_length": data_max_length, "learning_rate": lr, "initial_learning_rate": lr}
-        self.accelerator.init_trackers("speechspeech", config=hps)
+        self.accelerator.init_trackers("textsemantic", config=hps)
 
     def save(self, path):
         pkg = dict(
@@ -792,7 +801,7 @@ class TextToSemanticTrainer(nn.Module):
         for _ in range(self.grad_accum_every):
             semantic_token_ids, grapheme_token_ids = next(self.dl_iter)
 
-            loss = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
+            loss, _ = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
 
             self.accelerator.backward(loss / self.grad_accum_every)
 
@@ -806,7 +815,9 @@ class TextToSemanticTrainer(nn.Module):
 
         # log
 
-        self.print(f"{steps}: loss: {logs['loss']}")
+        if not (steps % self.log_every):
+            self.print(f"{steps}: loss: {logs['loss']:0.3f}")
+        
         self.accelerator.log({"train_loss": logs['loss']}, step=steps)
 
         # sample results every so often
@@ -820,7 +831,7 @@ class TextToSemanticTrainer(nn.Module):
                 self.train_wrapper.eval()
                 valid_loss = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
 
-            self.print(f'{steps}: valid loss {valid_loss}')
+            self.print(f'{steps}: valid loss {valid_loss:0.3f}')
             self.accelerator.log({"valid_loss": valid_loss}, step=steps)
 
         # save model every so often
