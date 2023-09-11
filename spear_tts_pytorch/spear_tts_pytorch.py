@@ -370,11 +370,12 @@ class TextToSemantic(Module):
         assert exists(num_semantic_token_ids), 'you need to either pass in a wav2vec model from audiolm-pytorch, or specify the number of semantic token ids with num_semantic_token_ids'
 
         self.num_semantic_token_ids = num_semantic_token_ids
+        self.num_text_token_ids = num_text_token_ids
 
         # padding id, for deriving attention mask automatically if not passed in
 
-        semantic_pad_id = semantic_pad_id
-        text_pad_id = text_pad_id
+        self.semantic_pad_id = semantic_pad_id
+        self.text_pad_id = text_pad_id
 
         self.pad_id = dict(
             speech = semantic_pad_id,
@@ -442,7 +443,7 @@ class TextToSemantic(Module):
             dim = dim,
             dim_head = dim_head,
             heads = heads,
-            depth = source_depth,
+            depth = target_depth,
             attn_dropout = attn_dropout,
             ff_mult = ff_mult,
             ff_dropout = ff_dropout,
@@ -668,7 +669,8 @@ class TextToSemantic(Module):
         target_type: SpeechOrTextLiteral,
         source_mask: Optional[Tensor] = None,
         target_mask: Optional[Tensor] = None,
-        return_loss = False
+        return_loss = False,
+        return_logits = False
     ):
         if isinstance(source, FloatTensor) and source_type == 'speech':
             assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
@@ -753,7 +755,10 @@ class TextToSemantic(Module):
             ignore_index = target_pad_id
         )
 
-        return loss
+        if return_logits:
+            return loss, logits
+        else:
+            return loss
 
 # pretraining modules
 
@@ -779,7 +784,8 @@ class SpeechSpeechPretrainWrapper(nn.Module):
         model: TextToSemantic,
         wav2vec: Optional[SemanticModelType] = None,
         deletion_prob: float = 0.6,
-        reconstruct_seq: bool = False
+        reconstruct_seq: bool = False,
+        mask_id = None
     ):
         super().__init__()
 
@@ -788,6 +794,7 @@ class SpeechSpeechPretrainWrapper(nn.Module):
 
         self.deletion_prob = deletion_prob
         self.reconstruct_seq = reconstruct_seq # whether to reconstruct the entire sequence, or just output the deleted ones in order
+        self.mask_id = mask_id
 
     def forward(
         self,
@@ -806,23 +813,30 @@ class SpeechSpeechPretrainWrapper(nn.Module):
 
         mask = torch.ones_like(x, dtype = torch.bool, device = self.model.device)
 
-        delete_mask = get_mask_subset_prob(mask, self.deletion_prob)
+        if exists(self.mask_id):
+            mask = mask.masked_fill(x == self.model.semantic_pad_id, False)
+            delete_mask = get_mask_subset_prob(mask, self.deletion_prob)
 
-        source = rearrange(x[~delete_mask], '(b n) -> b n', b = batch)
+            source = x.masked_fill(delete_mask, self.mask_id)
+        else:
+            delete_mask = get_mask_subset_prob(mask, self.deletion_prob)
+
+            source = rearrange(x[~delete_mask], '(b n) -> b n', b = batch)
 
         if self.reconstruct_seq:
             target = x
         else:
             target = rearrange(x[delete_mask], '(b n) -> b n', b = batch)
 
-        loss = self.model(
+        loss, logits = self.model(
             source, target,
             source_type = 'speech',
             target_type = 'speech',
-            return_loss = True
+            return_loss = True,
+            return_logits = True
         )
 
-        return loss
+        return loss, logits
 
 # wrapper for backtranslation task
 
@@ -844,14 +858,15 @@ class SemanticToTextWrapper(nn.Module):
         source = semantic_token_ids
         target = grapheme_token_ids
 
-        loss = self.model(
+        loss, logits = self.model(
             source, target,
             source_type = 'speech',
             target_type = 'text',
-            return_loss = True
+            return_loss = True,
+            return_logits = True
         )
 
-        return loss
+        return loss, logits
 
 # wrapper for text to semantic task
 
@@ -873,14 +888,15 @@ class TextToSemanticWrapper(nn.Module):
         source = grapheme_token_ids
         target = semantic_token_ids
 
-        loss = self.model(
+        loss, logits = self.model(
             source, target,
             source_type = 'text',
             target_type = 'speech',
-            return_loss = True
+            return_loss = True,
+            return_logits = True
         )
 
-        return loss
+        return loss, logits
 
 # wrapper for generating the pseudo-labelled audio to text dataset
 
