@@ -814,6 +814,8 @@ class SpeechSpeechPretrainWrapper(nn.Module):
         mask = torch.ones_like(x, dtype = torch.bool, device = self.model.device)
 
         if exists(self.mask_id):
+            assert self.reconstruct_seq, 'reconstruct_seq must be true if mask id is provided'
+            
             mask = mask.masked_fill(x == self.model.semantic_pad_id, False)
             delete_mask = get_mask_subset_prob(mask, self.deletion_prob)
 

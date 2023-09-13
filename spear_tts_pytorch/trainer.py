@@ -85,7 +85,6 @@ class SpeechSpeechPretrainer(nn.Module):
         num_warmup_steps,
         batch_size,
         dataset: Optional[Dataset] = None,
-        data_max_length = None,
         deletion_prob: float = 0.6,
         reconstruct_seq: bool = False,
         mask_id = None,
@@ -197,7 +196,7 @@ class SpeechSpeechPretrainer(nn.Module):
 
         self.results_folder.mkdir(parents = True, exist_ok = True)
         
-        hps = {"num_train_steps": num_train_steps, "num_warmup_steps": num_warmup_steps, "data_max_length": data_max_length, "learning_rate": lr, "initial_learning_rate": lr}
+        hps = {"num_train_steps": num_train_steps, "num_warmup_steps": num_warmup_steps, "learning_rate": lr, "initial_learning_rate": lr}
         self.accelerator.init_trackers("speechspeech", config=hps)
 
     def save(self, path):
@@ -286,7 +285,7 @@ class SpeechSpeechPretrainer(nn.Module):
         # log
 
         if not (steps % self.log_every):
-            self.print(f"{steps}: loss: {logs['loss']:0.3f}}")
+            self.print(f"{steps}: loss: {logs['loss']:0.3f}")
 
         self.accelerator.log({"train_loss": logs['loss']}, step=steps)
 
@@ -299,7 +298,7 @@ class SpeechSpeechPretrainer(nn.Module):
 
             with torch.inference_mode():
                 self.train_wrapper.eval()
-                valid_loss = self.train_wrapper(x)
+                valid_loss, _ = self.train_wrapper(x)
 
             self.print(f'{steps}: valid loss {valid_loss:0.3f}')
             self.accelerator.log({"valid_loss": valid_loss}, step=steps)
@@ -333,7 +332,6 @@ class SemanticToTextTrainer(nn.Module):
         num_warmup_steps,
         batch_size,
         dataset: Optional[Dataset] = None,
-        data_max_length = None,
         lr = 3e-4,
         initial_lr = 1e-5,
         grad_accum_every = 1,
@@ -451,7 +449,7 @@ class SemanticToTextTrainer(nn.Module):
 
         self.results_folder.mkdir(parents = True, exist_ok = True)
         
-        hps = {"num_train_steps": num_train_steps, "num_warmup_steps": num_warmup_steps, "data_max_length": data_max_length, "learning_rate": lr, "initial_learning_rate": lr}
+        hps = {"num_train_steps": num_train_steps, "num_warmup_steps": num_warmup_steps, "learning_rate": lr, "initial_learning_rate": lr}
         self.accelerator.init_trackers("semantictext", config=hps)
 
     def save(self, path):
@@ -553,7 +551,7 @@ class SemanticToTextTrainer(nn.Module):
 
             with torch.inference_mode():
                 self.train_wrapper.eval()
-                valid_loss = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
+                valid_loss, _ = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
 
             self.print(f'{steps}: valid loss {valid_loss:0.3f}')
             self.accelerator.log({"valid_loss": valid_loss}, step=steps)
@@ -589,7 +587,6 @@ class TextToSemanticTrainer(nn.Module):
         dataset: Optional[Dataset] = None,
         generated_audio_text_dataset_folder = None,
         dataset_delimiter_id = -1,
-        data_max_length = None,
         lr = 3e-4,
         initial_lr = 1e-5,
         grad_accum_every = 1,
@@ -726,7 +723,7 @@ class TextToSemanticTrainer(nn.Module):
 
         self.results_folder.mkdir(parents = True, exist_ok = True)
         
-        hps = {"num_train_steps": num_train_steps, "num_warmup_steps": num_warmup_steps, "data_max_length": data_max_length, "learning_rate": lr, "initial_learning_rate": lr}
+        hps = {"num_train_steps": num_train_steps, "num_warmup_steps": num_warmup_steps, "learning_rate": lr, "initial_learning_rate": lr}
         self.accelerator.init_trackers("textsemantic", config=hps)
 
     def save(self, path):
@@ -829,7 +826,7 @@ class TextToSemanticTrainer(nn.Module):
 
             with torch.inference_mode():
                 self.train_wrapper.eval()
-                valid_loss = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
+                valid_loss, _ = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
 
             self.print(f'{steps}: valid loss {valid_loss:0.3f}')
             self.accelerator.log({"valid_loss": valid_loss}, step=steps)
