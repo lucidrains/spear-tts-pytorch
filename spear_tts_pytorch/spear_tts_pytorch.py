@@ -208,9 +208,12 @@ class Attention(nn.Module):
         dim_head = 64,
         heads = 8,
         causal = False,
+        dim_context = None,
         dropout = 0.
     ):
         super().__init__()
+        dim_context = default(dim_context, dim)
+
         self.heads = heads
         self.scale = dim_head ** -0.5
         dim_inner = heads * dim_head
@@ -221,7 +224,7 @@ class Attention(nn.Module):
         self.attn_dropout = nn.Dropout(dropout)
 
         self.to_q = nn.Linear(dim, dim_inner, bias = False)
-        self.to_kv = nn.Linear(dim, dim_inner * 2, bias = False)
+        self.to_kv = nn.Linear(dim_context, dim_inner * 2, bias = False)
         self.to_out = nn.Linear(dim_inner, dim, bias = False)
 
     def forward(
