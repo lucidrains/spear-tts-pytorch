@@ -66,16 +66,19 @@ class Attend(nn.Module):
             print_once('Non-A100 GPU detected, using math or mem efficient attention if input tensor is on cuda')
             self.cuda_config = Config(False, True, True)
 
-    def get_mask(self, n, device):
-        if exists(self.mask) and self.mask.shape[-1] >= n:
-            return self.mask[:n, :n]
+    def get_mask(self, i, j, device):
+        n = max(i, j)
 
-        mask = torch.ones((n, n), device=device, dtype=torch.bool).triu(1)
-        self.register_buffer("mask", mask, persistent=False)
-        return mask
+        if exists(self.mask) and self.mask.shape[-1] >= n:
+            mask = self.mask[:n, :n]
+        else:
+            mask = torch.ones((n, n), device = device, dtype = torch.bool).triu(1)
+            self.register_buffer("mask", mask, persistent = False)
+
+        return mask[-i:, :]
 
     def flash_attn(self, q, k, v, mask = None):
-        _, heads, q_len, _, k_len, is_cuda = *q.shape, k.shape[-2], q.is_cuda
+        _, heads, q_len, _, k_len, causal, is_cuda, device = *q.shape, k.shape[-2], self.causal, q.is_cuda, q.device
 
         # Recommended for multi-query single-key-value attention by Tri Dao
         # kv shape torch.Size([1, 512, 64]) -> torch.Size([1, 8, 512, 64])
@@ -97,6 +100,18 @@ class Attend(nn.Module):
 
         config = self.cuda_config if is_cuda else self.cpu_config
 
+        # if q and k lengths differ (caching of key/values), and causal, manually construct causal attn mask as float, as not supported (flash attn 2 will support this eventually)
+
+        if causal and q_len != k_len:
+            causal_mask = self.get_mask(q_len, k_len, device = device)
+
+            if exists(mask):
+                mask = mask & ~causal_mask
+            else:
+                mask = ~causal_mask
+
+            causal = False
+
         # pytorch 2.0 flash attn: q, k, v, mask, dropout, causal, softmax_scale
         
         with torch.backends.cuda.sdp_kernel(**config._asdict()):
@@ -104,7 +119,7 @@ class Attend(nn.Module):
                 q, k, v,
                 attn_mask = mask,
                 dropout_p = self.dropout if self.training else 0., 
-                is_causal = self.causal
+                is_causal = causal
             )
 
         return out
@@ -138,7 +153,8 @@ class Attend(nn.Module):
         # causal mask
 
         if self.causal:
-            causal_mask = self.get_mask(n, device)
+            i, j = sim.shape[-2:]
+            causal_mask = self.get_mask(i, j, device)
             sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
 
         # attention
