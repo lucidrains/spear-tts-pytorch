@@ -74,8 +74,9 @@ assert len(generated_dataset) == 10
 - [x] add final step of finetuning on text -> speech + pseudolabelled dataset
 - [x] figure out the best way to store and manage the pseudo-labelled generated dataset
 - [x] batched beam search decoding
+- [x] allow for using rotary positions in decoder + flash attention, give Tri another citation
 
-- [ ] allow for using rotary positions in decoder + flash attention, give Tri another citation
+- [ ] add cached key / values for starter + single / grouped key values, make sure flash attention can support specialized causal mask before flash attention 2 is in pytorch core
 - [ ] polish the audio-text generation workflow
 - [ ] concatting the real audio-text dataset with the generated one -> or being able to convert real audio-text dataset to generated
 - [ ] see if one can speed up text-to-semantic transformer with NAR (perhaps maskgit style, or some AR / NAR hybrid) - also start toying around with speculative decoding
@@ -90,5 +91,14 @@ assert len(generated_dataset) == 10
     eprint  = {2302.03540},
     archivePrefix = {arXiv},
     primaryClass = {cs.SD}
+}
+```
+
+```bibtex
+@inproceedings{dao2022flashattention,
+    title   = {Flash{A}ttention: Fast and Memory-Efficient Exact Attention with {IO}-Awareness},
+    author  = {Dao, Tri and Fu, Daniel Y. and Ermon, Stefano and Rudra, Atri and R{\'e}, Christopher},
+    booktitle = {Advances in Neural Information Processing Systems},
+    year    = {2022}
 }
 ```

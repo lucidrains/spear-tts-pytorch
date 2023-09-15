@@ -23,6 +23,8 @@ from beartype.typing import Optional, Union, Callable, Literal, Tuple, List
 
 from x_clip.tokenizer import tokenizer
 
+from spear_tts_pytorch.attend import Attend
+
 from tqdm import tqdm
 
 # helpers
@@ -146,7 +148,8 @@ class Attention(nn.Module):
         causal = False,
         dim_context = None,
         dropout = 0.,
-        rotary_emb: Optional[RotaryEmbedding] = None
+        rotary_emb: Optional[RotaryEmbedding] = None,
+        flash = False
     ):
         super().__init__()
         dim_context = default(dim_context, dim)
@@ -157,7 +160,11 @@ class Attention(nn.Module):
 
         self.rotary_emb = rotary_emb
 
-        self.causal = causal
+        self.attend = Attend(
+            causal = causal,
+            flash = flash,
+            dropout = dropout
+        )
 
         self.norm = RMSNorm(dim)
         self.attn_dropout = nn.Dropout(dropout)
@@ -186,21 +193,7 @@ class Attention(nn.Module):
             assert not has_context
             q, k = self.rotary_emb.rotate_queries_with_cached_keys(q, k)
 
-        sim = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
-
-        if exists(mask):
-            mask = rearrange(mask, 'b j -> b 1 1 j')
-            sim = sim.masked_fill(~mask, -torch.finfo(sim.dtype).max)
-
-        if self.causal:
-            i, j = sim.shape[-2:]
-            causal_mask = torch.ones((i, j), device = x.device, dtype = torch.bool).triu(j - i + 1)
-            sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
-
-        attn = sim.softmax(dim = -1)
-        attn = self.attn_dropout(attn)
-
-        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = self.attend(q, k, v, mask = mask)
 
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
@@ -219,7 +212,8 @@ class Transformer(nn.Module):
         attn_dropout = 0.,
         ff_mult = 4,
         ff_dropout = 0.,
-        cross_attend = False
+        cross_attend = False,
+        attn_flash = False
     ):
         super().__init__()
 
@@ -229,8 +223,8 @@ class Transformer(nn.Module):
 
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                Attention(dim = dim, causal = causal, dim_head = dim_head, heads = heads, dropout = attn_dropout, rotary_emb = rotary_emb),
-                Attention(dim = dim, dim_head = dim_head, heads = heads, dropout = attn_dropout) if cross_attend else None,
+                Attention(dim = dim, causal = causal, dim_head = dim_head, heads = heads, dropout = attn_dropout, rotary_emb = rotary_emb, flash = attn_flash),
+                Attention(dim = dim, dim_head = dim_head, heads = heads, dropout = attn_dropout, flash = attn_flash) if cross_attend else None,
                 FeedForward(dim = dim, mult = ff_mult, dropout = ff_dropout)
             ]))
 
@@ -289,7 +283,8 @@ class TextToSemantic(Module):
         semantic_pad_id = -1,
         text_pad_id = 0,
         autoset_semantic_eos_id = True,
-        autoset_text_eos_id = True
+        autoset_text_eos_id = True,
+        attn_flash = False
     ):
         super().__init__()
         self.dim = dim
@@ -371,7 +366,8 @@ class TextToSemantic(Module):
             attn_dropout = attn_dropout,
             ff_mult = ff_mult,
             ff_dropout = ff_dropout,
-            causal = False
+            causal = False,
+            attn_flash = attn_flash
         )
 
         self.target_transformer = Transformer(
@@ -383,7 +379,8 @@ class TextToSemantic(Module):
             ff_mult = ff_mult,
             ff_dropout = ff_dropout,
             causal = True,
-            cross_attend = True
+            cross_attend = True,
+            attn_flash = attn_flash
         )
 
     @property
