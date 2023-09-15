@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'spear-tts-pytorch',
   packages = find_packages(exclude=[]),
-  version = '0.1.10',
+  version = '0.2.0',
   license='MIT',
   description = 'Spear-TTS - Pytorch',
   author = 'Phil Wang',
@@ -21,6 +21,7 @@ setup(
     'audiolm-pytorch>=1.2.8',
     'beartype',
     'einops>=0.6.1',
+    'rotary-embedding-torch>=0.3.0',
     'torch>=1.6',
     'tqdm',
     'x-clip>=0.12.2'

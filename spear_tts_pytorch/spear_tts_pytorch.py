@@ -15,6 +15,8 @@ from einops import rearrange, repeat, pack
 from audiolm_pytorch import FairseqVQWav2Vec, HubertWithKmeans
 from audiolm_pytorch.data import get_dataloader
 
+from rotary_embedding_torch import RotaryEmbedding
+
 from beartype import beartype
 from beartype.door import is_bearable
 from beartype.typing import Optional, Union, Callable, Literal, Tuple, List
@@ -104,72 +106,6 @@ def top_k(logits, thres = 0.9):
     probs.scatter_(1, ind, val)
     return probs
 
-# t5 relative positional bias
-
-class RelativePositionBias(nn.Module):
-    def __init__(
-        self,
-        *,
-        heads,
-        scale = 1,
-        causal = False,
-        num_buckets = 32,
-        max_distance = 128,
-    ):
-        super().__init__()
-        self.scale = scale
-        self.causal = causal
-        self.num_buckets = num_buckets
-        self.max_distance = max_distance
-        self.relative_attention_bias = nn.Embedding(num_buckets, heads)
-
-    @staticmethod
-    def _relative_position_bucket(
-        relative_position,
-        causal = True,
-        num_buckets = 32,
-        max_distance = 128
-    ):
-        ret = 0
-        n = -relative_position
-
-        if not causal:
-            num_buckets //= 2
-            ret += (n < 0).long() * num_buckets
-            n = torch.abs(n)
-        else:
-            n = torch.max(n, torch.zeros_like(n))
-
-        max_exact = num_buckets // 2
-        is_small = n < max_exact
-
-        val_if_large = max_exact + (
-            torch.log(n.float() / max_exact) / math.log(max_distance / max_exact) * (num_buckets - max_exact)
-        ).long()
-
-        val_if_large = torch.min(
-            val_if_large,
-            torch.full_like(val_if_large, num_buckets - 1)
-        )
-
-        ret += torch.where(is_small, n, val_if_large)
-        return ret
-
-    @property
-    def device(self):
-        return next(self.parameters()).device
-
-    def forward(self, n):
-        device = self.device
-        pos = torch.arange(n, dtype = torch.long, device = device)
-
-        rel_pos = rearrange(pos, 'j -> 1 j') - rearrange(pos, 'i -> i 1')
-        rp_bucket = self._relative_position_bucket(rel_pos, causal = self.causal, num_buckets = self.num_buckets, max_distance = self.max_distance)
-        values = self.relative_attention_bias(rp_bucket)
-        bias = rearrange(values, 'i j h -> h i j')
-
-        return bias * self.scale
-
 # rmsnorm
 
 class RMSNorm(nn.Module):
@@ -209,7 +145,8 @@ class Attention(nn.Module):
         heads = 8,
         causal = False,
         dim_context = None,
-        dropout = 0.
+        dropout = 0.,
+        rotary_emb: Optional[RotaryEmbedding] = None
     ):
         super().__init__()
         dim_context = default(dim_context, dim)
@@ -217,6 +154,8 @@ class Attention(nn.Module):
         self.heads = heads
         self.scale = dim_head ** -0.5
         dim_inner = heads * dim_head
+
+        self.rotary_emb = rotary_emb
 
         self.causal = causal
 
@@ -230,10 +169,10 @@ class Attention(nn.Module):
     def forward(
         self,
         x,
-        attn_bias = None,
         context = None,
         mask = None
     ):
+        has_context = exists(context)
         h = self.heads
         x = self.norm(x)
 
@@ -241,13 +180,13 @@ class Attention(nn.Module):
 
         q, k, v = (self.to_q(x), *self.to_kv(context).chunk(2, dim = -1))
 
-        q = q * self.scale
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
 
-        sim = einsum('b h i d, b h j d -> b h i j', q, k)
+        if exists(self.rotary_emb):
+            assert not has_context
+            q, k = self.rotary_emb.rotate_queries_with_cached_keys(q, k)
 
-        if exists(attn_bias):
-            sim = sim + attn_bias
+        sim = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
 
         if exists(mask):
             mask = rearrange(mask, 'b j -> b 1 1 j')
@@ -284,17 +223,13 @@ class Transformer(nn.Module):
     ):
         super().__init__()
 
-        self.rel_pos_bias = RelativePositionBias(
-            scale = dim_head ** 0.5,
-            causal = causal,
-            heads = heads
-        )
+        rotary_emb = RotaryEmbedding(dim_head)
 
         self.layers = nn.ModuleList([])
 
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                Attention(dim = dim, causal = causal, dim_head = dim_head, heads = heads, dropout = attn_dropout),
+                Attention(dim = dim, causal = causal, dim_head = dim_head, heads = heads, dropout = attn_dropout, rotary_emb = rotary_emb),
                 Attention(dim = dim, dim_head = dim_head, heads = heads, dropout = attn_dropout) if cross_attend else None,
                 FeedForward(dim = dim, mult = ff_mult, dropout = ff_dropout)
             ]))
@@ -308,13 +243,10 @@ class Transformer(nn.Module):
         context = None,
         context_mask = None
     ):
-        seq_len = x.shape[-2]
         has_context = exists(context)
 
-        attn_bias = self.rel_pos_bias(seq_len)
-
         for attn, maybe_cross_attn, ff in self.layers:
-            x = attn(x, mask = mask, attn_bias = attn_bias) + x
+            x = attn(x, mask = mask) + x
 
             if exists(maybe_cross_attn):
                 assert has_context
