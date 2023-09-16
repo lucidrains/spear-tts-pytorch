@@ -177,7 +177,9 @@ class Attention(nn.Module):
         self,
         x,
         context = None,
-        mask = None
+        mask = None,
+        cache = None,
+        return_cached_key_values = False
     ):
         has_context = exists(context)
         h = self.heads
@@ -189,6 +191,13 @@ class Attention(nn.Module):
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
 
+        new_cache = torch.stack((k, v))
+
+        if exists(cache):
+            ck, cv = cache
+            k = torch.cat((ck, k), dim = -2)
+            v = torch.cat((cv, v), dim = -2)
+
         if exists(self.rotary_emb):
             assert not has_context
             q, k = self.rotary_emb.rotate_queries_with_cached_keys(q, k)
@@ -196,7 +205,12 @@ class Attention(nn.Module):
         out = self.attend(q, k, v, mask = mask)
 
         out = rearrange(out, 'b h n d -> b n (h d)')
-        return self.to_out(out)
+        out =  self.to_out(out)
+
+        if not return_cached_key_values:
+            return out
+
+        return out, new_cache
 
 # transformer
 
@@ -235,12 +249,26 @@ class Transformer(nn.Module):
         x,
         mask = None,
         context = None,
-        context_mask = None
+        context_mask = None,
+        cache = None,
+        return_cache = False
     ):
         has_context = exists(context)
 
-        for attn, maybe_cross_attn, ff in self.layers:
-            x = attn(x, mask = mask) + x
+        if exists(cache):
+            cached_length, seq_len = cache.shape[-2], x.shape[-2]
+            assert seq_len > cached_length
+            x = x[:, cached_length:]
+
+        new_cache = []
+        iter_cache = iter(default(cache, []))
+
+        for self_attn, maybe_cross_attn, ff in self.layers:
+            residual = x
+            attn_out, key_values = self_attn(x, mask = mask, cache = next(iter_cache, None), return_cached_key_values = True)
+            x = attn_out + residual
+
+            new_cache.append(key_values)
 
             if exists(maybe_cross_attn):
                 assert has_context
@@ -248,7 +276,12 @@ class Transformer(nn.Module):
 
             x = ff(x) + x
 
-        return self.final_norm(x)
+        out = self.final_norm(x)
+
+        if not return_cache:
+            return out
+
+        return out, torch.stack(new_cache)
 
 # class
 
@@ -497,13 +530,15 @@ class TextToSemantic(Module):
         # loop to decode
 
         if not beam_search_decode:
+            cache = None
+
             for _ in tqdm(range(max_length)):
                 target_emb = target_token_emb(target)
                 target_emb = torch.cat((start_token, target_emb), dim = 1)
 
                 # target attention
 
-                target_emb = self.target_transformer(target_emb, context = source_emb, context_mask = source_mask)
+                target_emb, cache = self.target_transformer(target_emb, context = source_emb, context_mask = source_mask, cache = cache, return_cache = True)
 
                 # decoder logits
 
@@ -687,10 +722,10 @@ class TextToSemantic(Module):
             ignore_index = target_pad_id
         )
 
-        if return_logits:
-            return loss, logits
-        else:
+        if not return_logits:
             return loss
+
+        return loss, logits
 
 # pretraining modules
 
