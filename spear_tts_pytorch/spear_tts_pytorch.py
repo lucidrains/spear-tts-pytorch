@@ -191,10 +191,10 @@ class Attention(nn.Module):
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
 
-        new_cache = torch.stack((k, v))
+        new_cache = torch.stack((k, v), dim = 1)
 
         if exists(cache):
-            ck, cv = cache
+            ck, cv = cache.unbind(dim = 1)
             k = torch.cat((ck, k), dim = -2)
             v = torch.cat((cv, v), dim = -2)
 
@@ -261,7 +261,11 @@ class Transformer(nn.Module):
             x = x[:, cached_length:]
 
         new_cache = []
-        iter_cache = iter(default(cache, []))
+
+        if exists(cache):
+            iter_cache = iter(cache.unbind(dim = 1))
+        else:
+            iter_cache = iter([])
 
         for self_attn, maybe_cross_attn, ff in self.layers:
             residual = x
@@ -281,7 +285,7 @@ class Transformer(nn.Module):
         if not return_cache:
             return out
 
-        return out, torch.stack(new_cache)
+        return out, torch.stack(new_cache, dim = 1)
 
 # class
 
@@ -563,7 +567,7 @@ class TextToSemantic(Module):
                 target = mask_after_eos(target, target_eos_id, target_pad_id)
                 break
         else:
-            beam = [(target, 0.0)]
+            beam = [(target, 0.0, None)]
 
             batch_range = torch.arange(batch, device = self.device, dtype = torch.long)
             batch_range = rearrange(batch_range, 'b -> b 1')
@@ -571,13 +575,13 @@ class TextToSemantic(Module):
             for _ in tqdm(range(max_length)):
                 all_candidates = []
                 
-                for sentence, sentence_prob in beam:
+                for sentence, sentence_prob, sentence_cache in beam:
                     target_emb = target_token_emb(sentence)
                     target_emb = torch.cat((start_token, target_emb), dim = 1)
 
                     # target attention
-                    
-                    target_emb = self.target_transformer(target_emb, context = source_emb, context_mask = source_mask)
+
+                    target_emb, next_sentence_cache = self.target_transformer(target_emb, context = source_emb, context_mask = source_mask, cache = sentence_cache, return_cache = True)
 
                     # decoder logits
 
@@ -586,15 +590,15 @@ class TextToSemantic(Module):
 
                     log_probs = torch.log_softmax(logits / max(temperature, 1e-10), dim = -1)
                     topk_log_probs, topk_ids = log_probs.topk(beam_size, dim = -1)
-                    
+
                     for i in range(beam_size):
                         candidate = torch.cat([sentence, topk_ids[..., i:i + 1]], dim = -1)
                         candidate_prob = sentence_prob + topk_log_probs[..., i]
-                        all_candidates.append((candidate, candidate_prob))
+                        all_candidates.append((candidate, candidate_prob, next_sentence_cache))
 
                 # concat into shape (beam, batch, seq), (beam, batch)
 
-                candidates, candidate_probs = map(partial(torch.stack, dim = 1), zip(*all_candidates))
+                candidates, candidate_probs, candidate_caches = map(partial(torch.stack, dim = 1), zip(*all_candidates))
 
                 # sort by candidate scores across beams
 
@@ -602,16 +606,17 @@ class TextToSemantic(Module):
 
                 sorted_candidates = candidates[batch_range, sorted_indices]
                 sorted_candidate_probs = candidate_probs[batch_range, sorted_indices]
+                sorted_candidate_caches = candidate_caches[batch_range, sorted_indices]
 
                 # reconstitute ordered List[Tuple[Tensor, Tensor]]
 
-                ordered = list(zip(*map(partial(torch.unbind, dim = 1), (sorted_candidates, sorted_candidate_probs))))
+                ordered = list(zip(*map(partial(torch.unbind, dim = 1), (sorted_candidates, sorted_candidate_probs, sorted_candidate_caches))))
 
                 beam = ordered[:beam_size]
-                
+
                 # check if we've hit eos for all sequences
 
-                all_eos = all([((sentence == target_eos_id).any(dim = -1)).all() for sentence, _ in beam])
+                all_eos = all([((sentence == target_eos_id).any(dim = -1)).all() for sentence, _, _ in beam])
 
                 if all_eos:
                     break
@@ -898,7 +903,7 @@ class SemanticToTextDatasetGenerator(nn.Module):
     def forward(
         self,
         max_length = 2048,
-        beam_search_decode = False,
+        beam_search_decode = True,
         **generate_kwargs
     ):
         delimiter = torch.tensor([self.delimiter_id], device = self.model.device)
