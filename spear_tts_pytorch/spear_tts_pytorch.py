@@ -513,7 +513,8 @@ class TextToSemantic(Module):
         beam_search_decode = False,
         beam_size = 4,
         return_source = False,
-        cond_scale = 1.  # greater than 1 uses CFG
+        return_target_mask = False,
+        cond_scale = 1.
     ):
         if isinstance(source, (FloatTensor)) and source_type == 'speech':
             assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
@@ -655,10 +656,25 @@ class TextToSemantic(Module):
             if exists(target_eos_id):
                 target = mask_after_eos(target, target_eos_id, target_pad_id)
 
-        if not return_source:
-            return target
+        # whether to return the target mask
+        # for variable lengthed generation output
+        # needed for conditioning voicebox, NS2, etc
 
-        return source, target
+        if return_target_mask:
+            target_mask = target != target_pad_id
+
+        # 4 different types of return cases
+
+        if not return_source:
+            if not return_target_mask:
+                return target
+
+            return target, target_mask
+
+        if not return_target_mask:
+            return source, target
+
+        return source, target, target_mask
 
     @beartype
     def forward(
