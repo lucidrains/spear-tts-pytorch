@@ -516,6 +516,9 @@ class TextToSemantic(Module):
         return_target_mask = False,
         cond_scale = 1.
     ):
+        assert cond_scale >= 1.
+        assert not (cond_scale > 1 and self.cond_drop_prob == 0), 'you need to train with conditional drop probability greater than 0 to use classifier free guidance at inference, and it needs to be the right source to target pair'
+
         if isinstance(source, (FloatTensor)) and source_type == 'speech':
             assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
             source = self.wav2vec(source)
@@ -565,6 +568,7 @@ class TextToSemantic(Module):
 
         if not beam_search_decode:
             cache = None
+            null_cache = None
 
             for _ in tqdm(range(max_length)):
                 target_emb = target_token_emb(target)
@@ -572,14 +576,27 @@ class TextToSemantic(Module):
 
                 # target attention
 
-                target_emb, cache = self.target_transformer(target_emb, context = source_emb, context_mask = source_mask, cache = cache, return_cache = True)
+                attended_target_emb, cache = self.target_transformer(target_emb, context = source_emb, context_mask = source_mask, cache = cache, return_cache = True)
 
                 # decoder logits
 
-                logits = target_to_logit(target_emb)
-
+                logits = target_to_logit(attended_target_emb)
                 logits = logits[:, -1]
-                
+
+                # handle classifier free guidance
+
+                if cond_scale > 1.:
+                    null_source_mask = source_mask.float().zero_().bool()
+
+                    attended_null_target_emb, null_cache = self.target_transformer(target_emb, context = source_emb, context_mask = null_source_mask, cache = null_cache, return_cache = True)
+
+                    null_logits = target_to_logit(attended_null_target_emb)
+                    null_logits = null_logits[:, -1]
+
+                    logits = null_logits + (logits - null_logits) * cond_scale
+
+                # filter logits
+
                 logits = filter_logits_fn(logits, thres = filter_thres)
 
                 sampled = gumbel_sample(logits, temperature = temperature)
@@ -597,7 +614,7 @@ class TextToSemantic(Module):
                 target = mask_after_eos(target, target_eos_id, target_pad_id)
                 break
         else:
-            beam = [(target, 0.0, None)]
+            beam = [(target, 0.0, None, None)]
 
             batch_range = torch.arange(batch, device = self.device, dtype = torch.long)
             batch_range = rearrange(batch_range, 'b -> b 1')
@@ -605,18 +622,32 @@ class TextToSemantic(Module):
             for _ in tqdm(range(max_length)):
                 all_candidates = []
                 
-                for sentence, sentence_prob, sentence_cache in beam:
+                for sentence, sentence_prob, sentence_cache, null_sentence_cache in beam:
                     target_emb = target_token_emb(sentence)
                     target_emb = torch.cat((start_token, target_emb), dim = 1)
 
                     # target attention
 
-                    target_emb, next_sentence_cache = self.target_transformer(target_emb, context = source_emb, context_mask = source_mask, cache = sentence_cache, return_cache = True)
+                    attended_target_emb, next_sentence_cache = self.target_transformer(target_emb, context = source_emb, context_mask = source_mask, cache = sentence_cache, return_cache = True)
 
                     # decoder logits
 
-                    logits = target_to_logit(target_emb)
+                    logits = target_to_logit(attended_target_emb)
                     logits = logits[:, -1]
+
+                    # handle classifier free guidance
+
+                    if cond_scale > 1.:
+                        null_source_mask = source_mask.float().zero_().bool()
+
+                        attended_null_target_emb, next_null_sentence_cache = self.target_transformer(target_emb, context = source_emb, context_mask = null_source_mask, cache = null_sentence_cache, return_cache = True)
+
+                        null_logits = target_to_logit(attended_null_target_emb)
+                        null_logits = null_logits[:, -1]
+
+                        logits = null_logits + (logits - null_logits) * cond_scale
+
+                    # log probs for ranking beams
 
                     log_probs = torch.log_softmax(logits / max(temperature, 1e-10), dim = -1)
                     topk_log_probs, topk_ids = log_probs.topk(beam_size, dim = -1)
@@ -624,11 +655,11 @@ class TextToSemantic(Module):
                     for i in range(beam_size):
                         candidate = torch.cat([sentence, topk_ids[..., i:i + 1]], dim = -1)
                         candidate_prob = sentence_prob + topk_log_probs[..., i]
-                        all_candidates.append((candidate, candidate_prob, next_sentence_cache))
+                        all_candidates.append((candidate, candidate_prob, next_sentence_cache, next_null_sentence_cache))
 
                 # concat into shape (beam, batch, seq), (beam, batch)
 
-                candidates, candidate_probs, candidate_caches = map(partial(torch.stack, dim = 1), zip(*all_candidates))
+                candidates, candidate_probs, candidate_caches, candidate_null_caches = map(partial(torch.stack, dim = 1), zip(*all_candidates))
 
                 # sort by candidate scores across beams
 
@@ -637,16 +668,17 @@ class TextToSemantic(Module):
                 sorted_candidates = candidates[batch_range, sorted_indices]
                 sorted_candidate_probs = candidate_probs[batch_range, sorted_indices]
                 sorted_candidate_caches = candidate_caches[batch_range, sorted_indices]
+                sorted_candidate_null_caches = candidate_null_caches[batch_range, sorted_indices]
 
                 # reconstitute ordered List[Tuple[Tensor, Tensor]]
 
-                ordered = list(zip(*map(partial(torch.unbind, dim = 1), (sorted_candidates, sorted_candidate_probs, sorted_candidate_caches))))
+                ordered = list(zip(*map(partial(torch.unbind, dim = 1), (sorted_candidates, sorted_candidate_probs, sorted_candidate_caches, sorted_candidate_null_caches))))
 
                 beam = ordered[:beam_size]
 
                 # check if we've hit eos for all sequences
 
-                all_eos = all([((sentence == target_eos_id).any(dim = -1)).all() for sentence, _, _ in beam])
+                all_eos = all([((sentence == target_eos_id).any(dim = -1)).all() for sentence, _, _, _ in beam])
 
                 if all_eos:
                     break
