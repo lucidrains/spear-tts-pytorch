@@ -1,6 +1,7 @@
 import math
 from pathlib import Path
 from functools import partial
+from random import random
 
 import torch
 import torch.nn.functional as F
@@ -10,7 +11,7 @@ from torch.nn import Module, ModuleList
 
 from torch.utils.data import Dataset
 
-from einops import rearrange, repeat, pack
+from einops import rearrange, repeat, pack, reduce
 
 from audiolm_pytorch import FairseqVQWav2Vec, HubertWithKmeans
 from audiolm_pytorch.data import get_dataloader
@@ -24,6 +25,7 @@ from beartype.typing import Optional, Union, Callable, Literal, Tuple, List
 from x_clip.tokenizer import tokenizer
 
 from spear_tts_pytorch.attend import Attend
+from spear_tts_pytorch.distributed import all_gather
 
 from tqdm import tqdm
 
@@ -37,6 +39,9 @@ def default(val, d):
 
 def empty(t: Tensor):
     return t.numel() == 0
+
+def l2norm(t):
+    return F.normalize(t, dim = -1)
 
 def set_eos_id(t: Tensor, eos_id: int, pad_id: int):
     eos_indices = ((t == pad_id).cumsum(dim = -1) == 0).sum(dim = -1, keepdim = True).long()
@@ -149,7 +154,8 @@ class Attention(nn.Module):
         dim_context = None,
         dropout = 0.,
         rotary_emb: Optional[RotaryEmbedding] = None,
-        flash = False
+        flash = False,
+        add_null_kv = False
     ):
         super().__init__()
         dim_context = default(dim_context, dim)
@@ -173,6 +179,10 @@ class Attention(nn.Module):
         self.to_kv = nn.Linear(dim_context, dim_inner * 2, bias = False)
         self.to_out = nn.Linear(dim_inner, dim, bias = False)
 
+        self.add_null_kv = add_null_kv
+        if add_null_kv:
+            self.null_kv = nn.Parameter(torch.randn(2, heads, 1, dim_head))
+
     def forward(
         self,
         x,
@@ -183,6 +193,7 @@ class Attention(nn.Module):
     ):
         has_context = exists(context)
         h = self.heads
+        b = x.shape[0]
         x = self.norm(x)
 
         context = default(context, x)
@@ -201,6 +212,15 @@ class Attention(nn.Module):
         if exists(self.rotary_emb):
             assert not has_context
             q, k = self.rotary_emb.rotate_queries_with_cached_keys(q, k)
+
+        if self.add_null_kv:
+            assert not exists(self.rotary_emb)
+            nk, nv = map(lambda t: repeat(t, 'h 1 d -> b h 1 d', b = b), self.null_kv)
+            k = torch.cat((nk, k), dim = -2)
+            v = torch.cat((nv, v), dim = -2)
+
+            if exists(mask):
+                mask = F.pad(mask, (1, 0), value = True)
 
         out = self.attend(q, k, v, mask = mask)
 
@@ -238,7 +258,7 @@ class Transformer(nn.Module):
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 Attention(dim = dim, causal = causal, dim_head = dim_head, heads = heads, dropout = attn_dropout, rotary_emb = rotary_emb, flash = attn_flash),
-                Attention(dim = dim, dim_head = dim_head, heads = heads, dropout = attn_dropout, flash = attn_flash) if cross_attend else None,
+                Attention(dim = dim, dim_head = dim_head, heads = heads, dropout = attn_dropout, flash = attn_flash, add_null_kv = True) if cross_attend else None,
                 FeedForward(dim = dim, mult = ff_mult, dropout = ff_dropout)
             ]))
 
@@ -321,7 +341,9 @@ class TextToSemantic(Module):
         text_pad_id = 0,
         autoset_semantic_eos_id = True,
         autoset_text_eos_id = True,
-        attn_flash = False
+        attn_flash = False,
+        cond_drop_prob = 0.,
+        align_reg_loss_weight = 0.1
     ):
         super().__init__()
         self.dim = dim
@@ -420,6 +442,12 @@ class TextToSemantic(Module):
             attn_flash = attn_flash
         )
 
+        # classifier free guidance - prob of dropping condition
+
+        assert 0 <= cond_drop_prob < 1
+        self.cond_drop_prob = cond_drop_prob
+        self.align_reg_loss_weight = align_reg_loss_weight # lambda for weight of regularization loss in https://arxiv.org/abs/2309.08773
+
     @property
     def device(self):
         return next(self.parameters()).device
@@ -484,7 +512,8 @@ class TextToSemantic(Module):
         max_length = 2048,
         beam_search_decode = False,
         beam_size = 4,
-        return_source = False
+        return_source = False,
+        cond_scale = 1.  # greater than 1 uses CFG
     ):
         if isinstance(source, (FloatTensor)) and source_type == 'speech':
             assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
@@ -642,8 +671,12 @@ class TextToSemantic(Module):
         source_mask: Optional[Tensor] = None,
         target_mask: Optional[Tensor] = None,
         return_loss = False,
-        return_logits = False
+        return_logits = False,
+        cond_drop_prob: Optional[float] = None
     ):
+        cond_drop_prob = default(cond_drop_prob, self.cond_drop_prob)
+        drop_cond = cond_drop_prob > 0 and random() < cond_drop_prob
+
         if isinstance(source, FloatTensor) and source_type == 'speech':
             assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
             source = self.wav2vec(source)
@@ -706,9 +739,15 @@ class TextToSemantic(Module):
 
         source_emb = self.source_transformer(source_emb, source_mask)
 
+        # whether to drop condition, for CFG
+
+        context_mask = source_mask
+        if drop_cond:
+            context_mask = torch.zeros_like(context_mask).bool()
+
         # target attention
 
-        target_emb = self.target_transformer(target_emb, mask = target_mask, context = source_emb, context_mask = source_mask)
+        target_emb = self.target_transformer(target_emb, mask = target_mask, context = source_emb, context_mask = context_mask)
 
         # decoder logits
 
@@ -717,7 +756,7 @@ class TextToSemantic(Module):
         if not return_loss:
             return logits
 
-        assert not empty(target)
+        assert self.training and not empty(target)
 
         logits = rearrange(logits[:, :-1], 'b n c -> b c n')
 
@@ -726,6 +765,35 @@ class TextToSemantic(Module):
             target,
             ignore_index = target_pad_id
         )
+
+        if drop_cond:
+            # regularizer proposed in https://arxiv.org/abs/2309.08773, alternative to contrastive loss when unconditional
+            # supposedly fixes CFG for encoder / decoder transformers
+
+            source_emb, batch_sizes = all_gather(source_emb, 0, None)
+            target_emb, _           = all_gather(target_emb, 0, batch_sizes)
+
+            mask_value = -torch.finfo(source_emb.dtype).max
+
+            if exists(source_mask):
+                source_emb = source_emb.masked_fill(~source_mask[..., None], mask_value)
+
+            if exists(target_mask):
+                target_emb = target_emb.masked_fill(~target_mask[..., None], mask_value)
+
+            # they found that max pool worked best? - should leave masked mean on the table
+
+            batch, device = source_emb.shape[0], source_emb.device
+            source_emb = reduce(source_emb, 'b n d -> b d', 'max')
+            target_emb = reduce(target_emb, 'b n d -> b d', 'max')
+
+            source_emb, target_emb = map(l2norm, (source_emb, target_emb))
+
+            source_sim, target_sim = map(lambda t: einsum('i d, j d -> i j', t, t), (source_emb, target_emb))
+            diag_mask = torch.eye(batch, device = device, dtype = torch.bool)
+
+            align_reg_loss = F.mse_loss(source_sim[~diag_mask], target_sim[~diag_mask])
+            loss = loss + align_reg_loss * self.align_reg_loss_weight
 
         if not return_logits:
             return loss

@@ -102,3 +102,14 @@ assert len(generated_dataset) == 10
     year    = {2022}
 }
 ```
+
+```bibtex
+@misc{shi2023enhance,
+    title   = {Enhance audio generation controllability through representation similarity regularization}, 
+    author  = {Yangyang Shi and Gael Le Lan and Varun Nagaraja and Zhaoheng Ni and Xinhao Mei and Ernie Chang and Forrest Iandola and Yang Liu and Vikas Chandra},
+    year    = {2023},
+    eprint  = {2309.08773},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.SD}
+}
+```
