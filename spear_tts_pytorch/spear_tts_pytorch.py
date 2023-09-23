@@ -619,6 +619,8 @@ class TextToSemantic(Module):
             batch_range = torch.arange(batch, device = self.device, dtype = torch.long)
             batch_range = rearrange(batch_range, 'b -> b 1')
 
+            needs_classifier_free_guidance = cond_scale > 1.
+
             for _ in tqdm(range(max_length)):
                 all_candidates = []
                 
@@ -637,7 +639,7 @@ class TextToSemantic(Module):
 
                     # handle classifier free guidance
 
-                    if cond_scale > 1.:
+                    if needs_classifier_free_guidance:
                         null_source_mask = source_mask.float().zero_().bool()
 
                         attended_null_target_emb, next_null_sentence_cache = self.target_transformer(target_emb, context = source_emb, context_mask = null_source_mask, cache = null_sentence_cache, return_cache = True)
@@ -646,6 +648,8 @@ class TextToSemantic(Module):
                         null_logits = null_logits[:, -1]
 
                         logits = null_logits + (logits - null_logits) * cond_scale
+                    else:
+                        next_null_sentence_cache = next_sentence_cache[:, 0:0]
 
                     # log probs for ranking beams
 
