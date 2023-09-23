@@ -325,9 +325,9 @@ class TextToSemantic(Module):
         self,
         dim,
         *,
-        num_text_token_ids,
         source_depth,
         target_depth,
+        num_text_token_ids = None,
         tokenizer_encode: Optional[Callable] = None,
         use_openai_tokenizer = False,
         wav2vec: Optional[SemanticModelType] = None,
@@ -353,7 +353,11 @@ class TextToSemantic(Module):
 
         if use_openai_tokenizer:
             assert not exists(tokenizer_encode)
+            assert not exists(num_text_token_ids)
             self.tokenizer_encode = tokenizer.tokenize
+            num_text_token_ids = tokenizer.vocab_size
+        else:
+            assert exists(num_text_token_ids), 'num_text_token_ids not specified'
 
         num_semantic_token_ids = wav2vec.codebook_size if exists(wav2vec) else num_semantic_token_ids
         assert exists(num_semantic_token_ids), 'you need to either pass in a wav2vec model from audiolm-pytorch, or specify the number of semantic token ids with num_semantic_token_ids'
