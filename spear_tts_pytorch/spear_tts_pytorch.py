@@ -843,7 +843,7 @@ class TextToSemantic(Module):
             ignore_index = target_pad_id
         )
 
-        if source_type != target_type and drop_cond and self.align_reg_loss_weight > 0:
+        if should_sim_regularize and source_type != target_type and drop_cond and self.align_reg_loss_weight > 0:
             # regularizer proposed in https://arxiv.org/abs/2309.08773, alternative to contrastive loss when unconditional
             # supposedly fixes CFG for encoder / decoder transformers
 
