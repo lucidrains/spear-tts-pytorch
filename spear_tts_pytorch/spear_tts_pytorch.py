@@ -357,7 +357,9 @@ class TextToSemantic(Module):
         autoset_text_eos_id = True,
         attn_flash = False,
         cond_drop_prob = 0.,
-        align_reg_loss_weight = 0.1
+        align_reg_loss_weight = 0.1,
+        align_reg_use_logsumexp_pool = True,
+        align_reg_logsumexp_pool_temp = 0.1
     ):
         super().__init__()
         self.dim = dim
@@ -465,7 +467,10 @@ class TextToSemantic(Module):
 
         assert 0 <= cond_drop_prob < 1
         self.cond_drop_prob = cond_drop_prob
+
         self.align_reg_loss_weight = align_reg_loss_weight # lambda for weight of regularization loss in https://arxiv.org/abs/2309.08773
+        self.align_reg_use_logsumexp_pool = align_reg_use_logsumexp_pool
+        self.align_reg_logsumexp_pool_temp = align_reg_logsumexp_pool_temp
 
     @property
     def device(self):
@@ -837,7 +842,7 @@ class TextToSemantic(Module):
             ignore_index = target_pad_id
         )
 
-        if drop_cond:
+        if drop_cond and self.align_reg_loss_weight > 0:
             # regularizer proposed in https://arxiv.org/abs/2309.08773, alternative to contrastive loss when unconditional
             # supposedly fixes CFG for encoder / decoder transformers
 
@@ -852,11 +857,20 @@ class TextToSemantic(Module):
             if exists(target_mask):
                 target_emb = target_emb.masked_fill(~target_mask[..., None], mask_value)
 
-            # they found that max pool worked best? - should leave masked mean on the table
+            # they found that max pool worked best
+            # also offer logsumexp pool (smooth max)
 
             batch, device = source_emb.shape[0], source_emb.device
-            source_emb = reduce(source_emb, 'b n d -> b d', 'max')
-            target_emb = reduce(target_emb, 'b n d -> b d', 'max')
+
+            if self.align_reg_use_logsumexp_pool:
+                temp = self.align_reg_logsumexp_pool_temp
+                source_emb, target_emb = map(lambda t: t / temp, (source_emb, target_emb))
+                source_emb = reduce(source_emb, 'b n d -> b d', torch.logsumexp)
+                target_emb = reduce(target_emb, 'b n d -> b d', torch.logsumexp)
+                source_emb, target_emb = map(lambda t: t * temp, (source_emb, target_emb))
+            else:
+                source_emb = reduce(source_emb, 'b n d -> b d', 'max')
+                target_emb = reduce(target_emb, 'b n d -> b d', 'max')
 
             source_emb, target_emb = map(l2norm, (source_emb, target_emb))
 
