@@ -43,6 +43,8 @@ model = TextToSemantic(
     wav2vec = wav2vec,
     dim = 512,
     num_text_token_ids = 256,
+    heads = 8,
+    target_kv_heads = 2, # grouped query attention, for memory efficient decoding
     source_depth = 1,
     target_depth = 1
 )
@@ -111,5 +113,16 @@ assert len(generated_dataset) == 10
     eprint  = {2309.08773},
     archivePrefix = {arXiv},
     primaryClass = {cs.SD}
+}
+```
+
+```bibtex
+@article{Ainslie2023GQATG,
+    title   = {GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints},
+    author  = {Joshua Ainslie and James Lee-Thorp and Michiel de Jong and Yury Zemlyanskiy and Federico Lebr'on and Sumit K. Sanghai},
+    journal = {ArXiv},
+    year    = {2023},
+    volume  = {abs/2305.13245},
+    url     = {https://api.semanticscholar.org/CorpusID:258833177}
 }
 ```

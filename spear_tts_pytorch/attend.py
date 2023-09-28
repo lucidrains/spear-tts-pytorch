@@ -6,7 +6,7 @@ from collections import namedtuple
 from functools import wraps
 from packaging import version
 
-from einops import rearrange
+from einops import rearrange, repeat
 
 # constants
 
@@ -80,15 +80,6 @@ class Attend(nn.Module):
     def flash_attn(self, q, k, v, mask = None):
         _, heads, q_len, _, k_len, causal, is_cuda, device = *q.shape, k.shape[-2], self.causal, q.is_cuda, q.device
 
-        # Recommended for multi-query single-key-value attention by Tri Dao
-        # kv shape torch.Size([1, 512, 64]) -> torch.Size([1, 8, 512, 64])
-
-        if k.ndim == 3:
-            k = rearrange(k, 'b ... -> b 1 ...').expand_as(q)
-
-        if v.ndim == 3:
-            v = rearrange(v, 'b ... -> b 1 ...').expand_as(q)
-
         # Check if mask exists and expand to compatible shape
         # The mask is B L, so it would have to be expanded to B H N L
 
@@ -134,6 +125,10 @@ class Attend(nn.Module):
         """
 
         n, device = q.shape[-2], q.device
+        heads, kv_heads = q.shape[1], k.shape[1]
+
+        if kv_heads < heads:
+            k, v = map(lambda t: repeat(t, 'b h ... -> b (g h) ...', g = heads // kv_heads), (k, v))
 
         scale = q.shape[-1] ** -0.5
 

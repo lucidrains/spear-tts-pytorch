@@ -12,6 +12,7 @@ from torch.nn import Module, ModuleList
 from torch.utils.data import Dataset
 
 from einops import rearrange, repeat, pack, reduce
+from einops.layers.torch import Rearrange
 
 from audiolm_pytorch import FairseqVQWav2Vec, HubertWithKmeans
 from audiolm_pytorch.data import get_dataloader
@@ -150,6 +151,7 @@ class Attention(nn.Module):
         *,
         dim_head = 64,
         heads = 8,
+        kv_heads = None,
         causal = False,
         dim_context = None,
         dropout = 0.,
@@ -161,8 +163,12 @@ class Attention(nn.Module):
         dim_context = default(dim_context, dim)
 
         self.heads = heads
+        self.kv_heads = default(kv_heads, heads)
+        assert (self.heads % self.kv_heads) == 0, 'number of key value heads must be divisible by query heads'
+
         self.scale = dim_head ** -0.5
-        dim_inner = heads * dim_head
+        dim_query_inner = heads * dim_head
+        dim_kv_inner = self.kv_heads * dim_head
 
         self.rotary_emb = rotary_emb
 
@@ -175,13 +181,21 @@ class Attention(nn.Module):
         self.norm = RMSNorm(dim)
         self.attn_dropout = nn.Dropout(dropout)
 
-        self.to_q = nn.Linear(dim, dim_inner, bias = False)
-        self.to_kv = nn.Linear(dim_context, dim_inner * 2, bias = False)
-        self.to_out = nn.Linear(dim_inner, dim, bias = False)
+        self.to_q = nn.Sequential(
+            nn.Linear(dim, dim_query_inner, bias = False),
+            Rearrange('b n (h d) -> b h n d', h = self.heads)
+        )
+
+        self.to_kv = nn.Sequential(
+            nn.Linear(dim_context, dim_kv_inner * 2, bias = False),
+            Rearrange('b n (kv h d) -> kv b h n d', kv = 2, h = self.kv_heads)
+        )
+
+        self.to_out = nn.Linear(dim_query_inner, dim, bias = False)
 
         self.add_null_kv = add_null_kv
         if add_null_kv:
-            self.null_kv = nn.Parameter(torch.randn(2, heads, 1, dim_head))
+            self.null_kv = nn.Parameter(torch.randn(2, self.kv_heads, 1, dim_head))
 
     def forward(
         self,
@@ -192,15 +206,13 @@ class Attention(nn.Module):
         return_cached_key_values = False
     ):
         has_context = exists(context)
-        h = self.heads
         b = x.shape[0]
+
         x = self.norm(x)
 
         context = default(context, x)
 
-        q, k, v = (self.to_q(x), *self.to_kv(context).chunk(2, dim = -1))
-
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
+        q, k, v = (self.to_q(x), *self.to_kv(context))
 
         new_cache = torch.stack((k, v), dim = 1)
 
@@ -242,6 +254,7 @@ class Transformer(nn.Module):
         depth,
         dim_head = 64,
         heads = 8,
+        kv_heads = None,
         causal = False,
         attn_dropout = 0.,
         ff_mult = 4,
@@ -257,7 +270,7 @@ class Transformer(nn.Module):
 
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                Attention(dim = dim, causal = causal, dim_head = dim_head, heads = heads, dropout = attn_dropout, rotary_emb = rotary_emb, flash = attn_flash),
+                Attention(dim = dim, causal = causal, dim_head = dim_head, heads = heads, kv_heads = kv_heads, dropout = attn_dropout, rotary_emb = rotary_emb, flash = attn_flash),
                 Attention(dim = dim, dim_head = dim_head, heads = heads, dropout = attn_dropout, flash = attn_flash, add_null_kv = True) if cross_attend else None,
                 FeedForward(dim = dim, mult = ff_mult, dropout = ff_dropout)
             ]))
@@ -334,6 +347,7 @@ class TextToSemantic(Module):
         num_semantic_token_ids = None,
         dim_head = 64,
         heads = 8,
+        target_kv_heads = None,  # for grouped query attention, saving memory on decoder inference
         attn_dropout = 0.,
         ff_mult = 4,
         ff_dropout = 0.,
@@ -437,6 +451,7 @@ class TextToSemantic(Module):
             dim = dim,
             dim_head = dim_head,
             heads = heads,
+            kv_heads = target_kv_heads,
             depth = target_depth,
             attn_dropout = attn_dropout,
             ff_mult = ff_mult,
