@@ -748,7 +748,8 @@ class TextToSemantic(Module):
         target_mask: Optional[Tensor] = None,
         return_loss = False,
         return_logits = False,
-        cond_drop_prob: Optional[float] = None
+        cond_drop_prob: Optional[float] = None,
+        should_sim_regularize = True
     ):
         cond_drop_prob = default(cond_drop_prob, self.cond_drop_prob)
         drop_cond = cond_drop_prob > 0 and random() < cond_drop_prob
@@ -842,7 +843,7 @@ class TextToSemantic(Module):
             ignore_index = target_pad_id
         )
 
-        if drop_cond and self.align_reg_loss_weight > 0:
+        if source_type != target_type and drop_cond and self.align_reg_loss_weight > 0:
             # regularizer proposed in https://arxiv.org/abs/2309.08773, alternative to contrastive loss when unconditional
             # supposedly fixes CFG for encoder / decoder transformers
 
