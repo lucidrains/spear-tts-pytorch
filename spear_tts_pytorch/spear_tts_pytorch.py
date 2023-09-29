@@ -490,8 +490,12 @@ class TextToSemantic(Module):
             self.early_exit_layer = target_early_exit_layer
             self.detach_early_exit_embed = detach_early_exit_embed
 
-            self.to_early_exit_semantic_logits = nn.Linear(dim, num_semantic_token_ids, bias = False)
-            self.to_early_exit_semantic_logits.weight = semantic_token_emb.weight
+            self.to_early_exit_semantic_logits = nn.Sequential(
+                RMSNorm(dim),
+                nn.Linear(dim, num_semantic_token_ids, bias = False)
+            )
+
+            self.to_early_exit_semantic_logits[-1].weight = semantic_token_emb.weight
 
     @property
     def device(self):
