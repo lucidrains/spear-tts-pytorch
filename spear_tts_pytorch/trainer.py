@@ -602,7 +602,8 @@ class TextToSemanticTrainer(nn.Module):
         split_batches = False,
         drop_last = False,
         force_clear_prev_results = None,
-        freeze_encoder_layers_below = 2
+        freeze_encoder_layers_below = 2,
+        should_train_early_exit_layer_if_available = True
     ):
         super().__init__()
         check_one_trainer()
@@ -622,6 +623,8 @@ class TextToSemanticTrainer(nn.Module):
         self.num_warmup_steps = num_warmup_steps
         self.batch_size = batch_size
         self.grad_accum_every = grad_accum_every
+
+        self.train_early_exit = model.target_has_early_exit and should_train_early_exit_layer_if_available
 
         # when doing text to semantic generation
         # encoder is partially frozen and decoder is frozen
@@ -798,7 +801,7 @@ class TextToSemanticTrainer(nn.Module):
         for _ in range(self.grad_accum_every):
             semantic_token_ids, grapheme_token_ids = next(self.dl_iter)
 
-            loss, _ = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
+            loss, _ = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids, return_early_exit_loss = self.train_early_exit)
 
             self.accelerator.backward(loss / self.grad_accum_every)
 
@@ -826,7 +829,7 @@ class TextToSemanticTrainer(nn.Module):
 
             with torch.inference_mode():
                 self.train_wrapper.eval()
-                valid_loss, _ = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids)
+                valid_loss, _ = self.train_wrapper(semantic_token_ids = semantic_token_ids, grapheme_token_ids = grapheme_token_ids, return_early_exit_loss = self.train_early_exit)
 
             self.print(f'{steps}: valid loss {valid_loss:0.3f}')
             self.accelerator.log({"valid_loss": valid_loss}, step=steps)
