@@ -126,3 +126,14 @@ assert len(generated_dataset) == 10
     url     = {https://api.semanticscholar.org/CorpusID:258833177}
 }
 ```
+
+```bibtex
+@inproceedings{Leviathan2022FastIF,
+    title   = {Fast Inference from Transformers via Speculative Decoding},
+    author  = {Yaniv Leviathan and Matan Kalman and Y. Matias},
+    booktitle = {International Conference on Machine Learning},
+    year    = {2022},
+    url     = {https://api.semanticscholar.org/CorpusID:254096365}
+}
+```
+
