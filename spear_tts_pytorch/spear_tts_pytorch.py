@@ -285,7 +285,8 @@ class Transformer(nn.Module):
         context_mask = None,
         cache = None,
         return_cache = False,
-        return_hiddens = False
+        return_hiddens = False,
+        early_exit_at_layer = None
     ):
         has_context = exists(context)
 
@@ -302,7 +303,9 @@ class Transformer(nn.Module):
         else:
             iter_cache = iter([])
 
-        for self_attn, maybe_cross_attn, ff in self.layers:
+        for ind, (self_attn, maybe_cross_attn, ff) in enumerate(self.layers):
+            layer = ind + 1
+
             residual = x
             attn_out, key_values = self_attn(x, mask = mask, cache = next(iter_cache, None), return_cached_key_values = True)
             x = attn_out + residual
@@ -315,6 +318,14 @@ class Transformer(nn.Module):
 
             x = ff(x) + x
             hiddens.append(x)
+
+            if exists(early_exit_at_layer) and early_exit_at_layer == layer:
+                break
+
+        if exists(early_exit_at_layer):
+            if return_hiddens:
+                return x, torch.stack(hiddens)
+            return x
 
         out = self.final_norm(x)
 
@@ -485,9 +496,11 @@ class TextToSemantic(Module):
         # using early exist strategy so one can train just the same model
 
         self.target_has_early_exit = exists(target_early_exit_layer)
+        self.early_exit_layer = target_early_exit_layer
 
         if self.target_has_early_exit:
-            self.early_exit_layer = target_early_exit_layer
+            assert 0 < target_early_exit_layer <= target_depth, f'the early exit layer for the speech transformer must be between 1 and {target_depth}'
+
             self.detach_early_exit_embed = detach_early_exit_embed
 
             self.to_early_exit_semantic_logits = nn.Sequential(
@@ -775,7 +788,8 @@ class TextToSemantic(Module):
         return_logits = False,
         cond_drop_prob: Optional[float] = None,
         should_sim_regularize = True,
-        return_early_exit_loss = False
+        return_early_exit_loss = False,
+        return_early_exit_logits_only = False
     ):
         cond_drop_prob = default(cond_drop_prob, self.cond_drop_prob)
         drop_cond = cond_drop_prob > 0 and random() < cond_drop_prob
@@ -850,11 +864,21 @@ class TextToSemantic(Module):
 
         # target attention
 
-        target_emb, target_hiddens = self.target_transformer(target_emb, mask = target_mask, context = source_emb, context_mask = context_mask, return_hiddens = True)
+        target_emb, target_hiddens = self.target_transformer(
+            target_emb,
+            mask = target_mask,
+            context = source_emb,
+            context_mask = context_mask,
+            return_hiddens = True,
+            early_exit_at_layer = self.early_exit_layer if return_early_exit_logits_only else None
+        )
 
         # decoder logits
 
-        logits = target_to_logit(target_emb)
+        if return_early_exit_logits_only:
+            logits = self.to_early_exit_semantic_logits(target_emb)
+        else:
+            logits = target_to_logit(target_emb)
 
         if not return_loss:
             return logits
