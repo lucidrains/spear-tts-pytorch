@@ -284,7 +284,8 @@ class Transformer(nn.Module):
         context = None,
         context_mask = None,
         cache = None,
-        return_cache = False
+        return_cache = False,
+        return_hiddens = False
     ):
         has_context = exists(context)
 
@@ -294,6 +295,7 @@ class Transformer(nn.Module):
             x = x[:, cached_length:]
 
         new_cache = []
+        hiddens = []
 
         if exists(cache):
             iter_cache = iter(cache.unbind(dim = 1))
@@ -312,8 +314,13 @@ class Transformer(nn.Module):
                 x = maybe_cross_attn(x, context = context, mask = context_mask) + x
 
             x = ff(x) + x
+            hiddens.append(x)
 
         out = self.final_norm(x)
+
+        if return_hiddens:
+            assert not return_cache
+            return out, torch.stack(hiddens)
 
         if not return_cache:
             return out
@@ -357,6 +364,8 @@ class TextToSemantic(Module):
         autoset_text_eos_id = True,
         attn_flash = False,
         cond_drop_prob = 0.,
+        target_early_exit_layer = None,
+        detach_early_exit_embed = False,
         align_reg_loss_weight = 0.1,
         align_reg_use_logsumexp_pool = True,
         align_reg_logsumexp_pool_temp = 0.1
@@ -471,6 +480,18 @@ class TextToSemantic(Module):
         self.align_reg_loss_weight = align_reg_loss_weight # lambda for weight of regularization loss in https://arxiv.org/abs/2309.08773
         self.align_reg_use_logsumexp_pool = align_reg_use_logsumexp_pool
         self.align_reg_logsumexp_pool_temp = align_reg_logsumexp_pool_temp
+
+        # for speculative decoding, to speed up text-to-speech decoding and make real-time TTS approach more feasible with spear-tts
+        # using early exist strategy so one can train just the same model
+
+        self.target_has_early_exit = exists(target_early_exit_layer)
+
+        if self.target_has_early_exit:
+            self.early_exit_layer = target_early_exit_layer
+            self.detach_early_exit_embed = detach_early_exit_embed
+
+            self.to_early_exit_semantic_logits = nn.Linear(dim, num_semantic_token_ids, bias = False)
+            self.to_early_exit_semantic_logits.weight = semantic_token_emb.weight
 
     @property
     def device(self):
@@ -749,7 +770,8 @@ class TextToSemantic(Module):
         return_loss = False,
         return_logits = False,
         cond_drop_prob: Optional[float] = None,
-        should_sim_regularize = True
+        should_sim_regularize = True,
+        return_early_exit_loss = False
     ):
         cond_drop_prob = default(cond_drop_prob, self.cond_drop_prob)
         drop_cond = cond_drop_prob > 0 and random() < cond_drop_prob
@@ -824,7 +846,7 @@ class TextToSemantic(Module):
 
         # target attention
 
-        target_emb = self.target_transformer(target_emb, mask = target_mask, context = source_emb, context_mask = context_mask)
+        target_emb, target_hiddens = self.target_transformer(target_emb, mask = target_mask, context = source_emb, context_mask = context_mask, return_hiddens = True)
 
         # decoder logits
 
@@ -842,6 +864,28 @@ class TextToSemantic(Module):
             target,
             ignore_index = target_pad_id
         )
+
+        if return_early_exit_loss:
+            assert self.target_has_early_exit, 'you need to set the `target_early_exit_layer` in order to train a predictor on an earlier hidden dimension for speculative decoding'
+            assert source_type == 'text' and target_type == 'speech'
+
+            early_layer_index = self.early_exit_layer - 1
+            early_embed = target_hiddens[early_layer_index]
+
+            if self.detach_early_exit_embed:
+                # a way to train the early exit head without affecting the main loss
+                early_embed = early_embed.detach()
+
+            early_exit_logits = self.to_early_exit_semantic_logits(early_embed)
+            early_exit_logits = rearrange(early_exit_logits[:, :-1], 'b n c -> b c n')
+
+            early_exit_loss = F.cross_entropy(
+                early_exit_logits,
+                target,
+                ignore_index = target_pad_id
+            )
+
+            loss = loss + early_exit_loss
 
         if should_sim_regularize and source_type != target_type and drop_cond and self.align_reg_loss_weight > 0:
             # regularizer proposed in https://arxiv.org/abs/2309.08773, alternative to contrastive loss when unconditional
@@ -924,7 +968,8 @@ class SpeechSpeechPretrainWrapper(nn.Module):
 
     def forward(
         self,
-        x
+        x,
+        return_early_exit_loss = False
     ):
         is_raw_audio = x.dtype == torch.float
 
@@ -961,7 +1006,8 @@ class SpeechSpeechPretrainWrapper(nn.Module):
             source_type = 'speech',
             target_type = 'speech',
             return_loss = True,
-            return_logits = True
+            return_logits = True,
+            return_early_exit_loss = return_early_exit_loss,
         )
 
         return loss, logits
