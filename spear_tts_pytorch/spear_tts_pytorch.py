@@ -786,7 +786,6 @@ class TextToSemantic(Module):
             assert source_type == 'text' and target_type == 'speech', 'speculative decoding can only be employed for text-to-speech decoding'
 
             batch, prompt_seq_len, device = *target.shape, self.device
-            sample_num_times = max(0, max_length - prompt_seq_len)
 
             cache = None
             small_cache = None
@@ -926,15 +925,27 @@ class TextToSemantic(Module):
                 target = torch.cat((target, next_token), dim = -1)
                 seq_lens += 1
 
+                all_eos = (target == target_eos_id).any(dim = -1).all()
+
+                if all_eos:
+                    break
+
             # now left align
+
+            max_seq_lens = seq_lens.amax()
 
             num_pad_left = target.shape[-1] - seq_lens
             max_pad_left = num_pad_left.amax()
             target = F.pad(target, (0, max_pad_left), value = target_pad_id)
 
-            seq_len_range = torch.arange(max_length, device = device, dtype = torch.long)
+            seq_len_range = torch.arange(min(max_length, max_seq_lens), device = device, dtype = torch.long)
             target = target[batch_range, seq_len_range + num_pad_left[..., None]]
             target = target[..., prompt_seq_len:]
+
+            # mask out anything after eos
+
+            if exists(target_eos_id):
+                target = mask_after_eos(target, target_eos_id, target_pad_id)
 
         # whether to return the target mask
         # for variable lengthed generation output

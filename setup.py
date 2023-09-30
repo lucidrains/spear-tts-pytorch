@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'spear-tts-pytorch',
   packages = find_packages(exclude=[]),
-  version = '0.4.0',
+  version = '0.4.1',
   license='MIT',
   description = 'Spear-TTS - Pytorch',
   author = 'Phil Wang',
