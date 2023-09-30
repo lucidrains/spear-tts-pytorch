@@ -591,7 +591,7 @@ class TextToSemantic(Module):
         target_type: SpeechOrTextLiteral,
         temperature = 1.,
         filter_logits_fn = top_k,
-        filter_thres = 0.9,
+        filter_fn_kwargs: dict = dict(),
         source_mask: Optional[Tensor] = None,
         max_length = 2048,
         beam_search_decode = False,
@@ -686,7 +686,7 @@ class TextToSemantic(Module):
 
                 # filter logits
 
-                logits = filter_logits_fn(logits, thres = filter_thres)
+                logits = filter_logits_fn(logits, **filter_fn_kwargs)
 
                 sampled = gumbel_sample(logits, temperature = temperature)
                 target, _ = pack((target, sampled), 'b *')
@@ -820,7 +820,7 @@ class TextToSemantic(Module):
                     small_logits = self.to_early_exit_semantic_logits(small_emb)
                     small_logits = small_logits[:, -1]
 
-                    small_logits = filter_logits_fn(small_logits, thres = filter_thres)
+                    small_logits = filter_logits_fn(small_logits, **filter_fn_kwargs)
                     all_small_logits.append(small_logits)
 
                     sample = gumbel_sample(small_logits, temperature = temperature, dim = -1)
@@ -848,7 +848,7 @@ class TextToSemantic(Module):
 
                 logits = target_to_logit(emb)
                 logits = logits[..., -(spec_decode_gamma + 1):, :]
-                logits = filter_logits_fn(logits, thres = filter_thres)
+                logits = filter_logits_fn(logits, **filter_fn_kwargs)
 
                 # prob and prob of small model (p(x) and q(x) in algorithm 1)
 
