@@ -909,14 +909,11 @@ class TextToSemantic(Module):
                     cache = rearrange(cache, 'b n ... d -> b ... n d')
                     small_cache = rearrange(small_cache, 'b n ... d -> b ... n d')
 
-                    if max_seq_len == 0:
-                        target = target[:, 0:0]
-                        cache = cache[..., 0:0, :]
-                        small_cache = small_cache[..., 0:0, :]
                     if target.shape[-1] > max_seq_len:
-                        target = target[:, -max_seq_len:]
-                        cache = cache[..., -max_seq_len:, :]
-                        small_cache = small_cache[..., -max_seq_len:, :]
+                        left_index = target.shape[-1] - max_seq_len
+                        target = target[:, left_index:]
+                        cache = cache[..., left_index:, :]
+                        small_cache = small_cache[..., left_index:, :]
 
                 # sample the additional token, one of the tricks in the paper to better bound the worst case
 
