@@ -333,8 +333,8 @@ class Transformer(nn.Module):
                 break
 
         if exists(early_exit_at_layer):
-            if return_hiddens:
-                return x, torch.stack(hiddens)
+            if return_cache:
+                return x, torch.stack(new_cache, dim = 1)
             return x
 
         out = self.final_norm(x)
