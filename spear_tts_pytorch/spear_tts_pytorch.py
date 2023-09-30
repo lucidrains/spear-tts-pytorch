@@ -1071,7 +1071,7 @@ class TextToSemantic(Module):
         if not return_loss:
             return logits
 
-        assert self.training and not empty(target)
+        assert (self.training and not empty(target)) or not self.training
 
         logits = rearrange(logits[:, :-1], 'b n c -> b c n')
 
