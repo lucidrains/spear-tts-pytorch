@@ -93,6 +93,8 @@ class Attend(nn.Module):
 
         # if q and k lengths differ (caching of key/values), and causal, manually construct causal attn mask as float, as not supported (flash attn 2 will support this eventually)
 
+        row_is_entirely_masked = None
+
         if causal and q_len != k_len:
             causal_mask = self.get_mask(q_len, k_len, device = device)
 
@@ -100,6 +102,9 @@ class Attend(nn.Module):
                 mask = mask & ~causal_mask
             else:
                 mask = ~causal_mask
+
+            row_is_entirely_masked = ~mask.any(dim = -1)
+            mask[..., 0] = mask[..., 0] | row_is_entirely_masked
 
             causal = False
 
@@ -112,6 +117,9 @@ class Attend(nn.Module):
                 dropout_p = self.dropout if self.training else 0., 
                 is_causal = causal
             )
+
+        if exists(row_is_entirely_masked):
+            out = out.masked_fill(row_is_entirely_masked[..., None], 0.)
 
         return out
 

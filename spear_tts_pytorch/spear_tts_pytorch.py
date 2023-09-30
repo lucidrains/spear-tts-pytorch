@@ -63,6 +63,12 @@ def mask_after_eos(target, eos_id, pad_id):
     mask = F.pad(mask, (1, -1), value = False)
     return target.masked_fill(mask, pad_id)
 
+def safe_div(num, den, eps = 1e-10):
+    return num / max(den, eps)
+
+def find_first_true_index(bool_tensor, dim = -1):
+    return (bool_tensor.cumsum(dim = dim) == 0).sum(dim = dim)
+
 # freezing and unfreezing helpers
 
 def set_requires_grad_(module: Module, requires_grad: bool):
@@ -99,20 +105,17 @@ def gumbel_sample(t, temperature = 1., dim = -1):
 def top_p(logits, thres = 0.9):
     sorted_logits, sorted_indices = torch.sort(logits, descending=True)
     cum_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-
-    sorted_indices_to_remove = cum_probs > thres
-    sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
-    sorted_indices_to_remove[:, 0] = 0
-
+    sorted_indices_to_remove = F.pad(cum_probs > thres, (1, -1), value = 0)
     sorted_logits[sorted_indices_to_remove] = float('-inf')
-    return sorted_logits.scatter(1, sorted_indices, sorted_logits)
+    sorted_logits = sorted_logits.scatter(-1, sorted_indices, sorted_logits)
+    return sorted_logits
 
 def top_k(logits, thres = 0.1, k = None):
     if not exists(k):
         k = math.ceil(thres * logits.shape[-1])
-    val, ind = torch.topk(logits, k)
+    val, ind = torch.topk(logits, k, dim = -1)
     probs = torch.full_like(logits, float('-inf'))
-    probs.scatter_(1, ind, val)
+    probs.scatter_(-1, ind, val)
     return probs
 
 # residual wrapper
@@ -224,12 +227,12 @@ class Attention(nn.Module):
 
         q, k, v = (self.to_q(x), *self.to_kv(context))
 
-        new_cache = torch.stack((k, v), dim = 1)
-
         if exists(cache):
             ck, cv = cache.unbind(dim = 1)
             k = torch.cat((ck, k), dim = -2)
             v = torch.cat((cv, v), dim = -2)
+
+        new_cache = torch.stack((k, v), dim = 1)
 
         if exists(self.rotary_emb):
             assert not has_context
@@ -296,9 +299,16 @@ class Transformer(nn.Module):
         cache = None,
         return_cache = False,
         return_hiddens = False,
-        early_exit_at_layer = None
+        early_exit_at_layer = None,
+        seq_start_pos = None
     ):
         has_context = exists(context)
+
+        if exists(seq_start_pos):
+            assert not exists(mask)
+            seq_len = x.shape[-2]
+            seq_arange = torch.arange(seq_len, device = x.device, dtype = torch.long)
+            mask = seq_arange >= seq_start_pos[..., None]
 
         if exists(cache):
             cached_length, seq_len = cache.shape[-2], x.shape[-2]
@@ -585,6 +595,9 @@ class TextToSemantic(Module):
         source_mask: Optional[Tensor] = None,
         max_length = 2048,
         beam_search_decode = False,
+        spec_decode = False,
+        spec_decode_gamma = 5,
+        spec_decode_lenience = 1.,
         beam_size = 4,
         return_source = False,
         return_target_mask = False,
@@ -640,7 +653,9 @@ class TextToSemantic(Module):
 
         # loop to decode
 
-        if not beam_search_decode:
+        assert not (beam_search_decode and spec_decode), 'you must choose either beam decode or speculative decoding, but not both'
+
+        if not beam_search_decode and not spec_decode:
             cache = None
             null_cache = None
 
@@ -687,7 +702,7 @@ class TextToSemantic(Module):
 
                 target = mask_after_eos(target, target_eos_id, target_pad_id)
                 break
-        else:
+        elif beam_search_decode:
             beam = [(target, 0.0, None, None)]
 
             batch_range = torch.arange(batch, device = self.device, dtype = torch.long)
@@ -766,6 +781,161 @@ class TextToSemantic(Module):
             if exists(target_eos_id):
                 target = mask_after_eos(target, target_eos_id, target_pad_id)
 
+        elif spec_decode:
+            assert self.target_has_early_exit, 'early exit layer must have been specified and trained in order to use speculative decoding (using the earlier layers of the target transformer as the small fast prediction network)'
+            assert source_type == 'text' and target_type == 'speech', 'speculative decoding can only be employed for text-to-speech decoding'
+
+            batch, prompt_seq_len, device = *target.shape, self.device
+            sample_num_times = max(0, max_length - prompt_seq_len)
+
+            cache = None
+            small_cache = None
+
+            num_steps = 0
+            total_accepted = 0
+
+            batch_range = torch.arange(batch, device = device, dtype = torch.long)[..., None]
+            seq_lens = torch.full((batch,), prompt_seq_len, device = device, dtype = torch.long)
+
+            while (seq_lens < max_length).any():
+
+                # predict with smaller network
+
+                all_small_logits = []
+                q_sampled_out = []
+
+                for _ in range(spec_decode_gamma):
+                    target_emb = target_token_emb(target)
+                    target_emb = torch.cat((start_token, target_emb), dim = 1)
+
+                    small_emb, small_cache = self.target_transformer(
+                        target_emb,
+                        cache = small_cache,
+                        context = source_emb,
+                        context_mask = source_mask,
+                        return_cache = True,
+                        early_exit_at_layer = self.early_exit_layer,
+                        seq_start_pos = target.shape[-1] - seq_lens
+                    )
+
+                    small_logits = self.to_early_exit_semantic_logits(small_emb)
+                    small_logits = small_logits[:, -1]
+
+                    small_logits = filter_logits_fn(small_logits, thres = filter_thres)
+                    all_small_logits.append(small_logits)
+
+                    sample = gumbel_sample(small_logits, temperature = temperature, dim = -1)
+                    target = torch.cat((target, sample[..., None]), dim = -1)
+                    seq_lens += 1
+
+                    q_sampled_out.append(rearrange(sample, 'b -> b 1 1'))
+
+                q_sampled_out = torch.cat(q_sampled_out, dim = -2)
+                small_logits = torch.stack(all_small_logits, dim = -2)
+
+                # verify with larger network
+
+                target_emb = target_token_emb(target)
+                target_emb = torch.cat((start_token, target_emb), dim = 1)
+
+                emb, cache = self.target_transformer(
+                    target_emb,
+                    cache = cache,
+                    context = source_emb,
+                    context_mask = source_mask,
+                    return_cache = True,
+                    seq_start_pos = target.shape[-1] - seq_lens
+                )
+
+                logits = target_to_logit(emb)
+                logits = logits[..., -(spec_decode_gamma + 1):, :]
+                logits = filter_logits_fn(logits, thres = filter_thres)
+
+                # prob and prob of small model (p(x) and q(x) in algorithm 1)
+
+                prob = safe_div(logits, temperature).softmax(dim = -1)
+                small_prob = safe_div(small_logits, temperature).softmax(dim = -1)
+
+                p, prob_next = prob[:, :-1], prob[:, -1]
+
+                p = p.gather(-1, q_sampled_out)
+                q = small_prob.gather(-1, q_sampled_out) * spec_decode_lenience
+
+                p, q = [rearrange(t, 'b n 1 -> b n') for t in (p, q)]
+
+                r = random_uniform = torch.zeros_like(q).float().uniform_(0, 1)
+
+                accepted = find_first_true_index(r > (p / q))
+
+                total_accepted += accepted.float().mean()
+                num_steps += 1
+
+                num_rejected = spec_decode_gamma - accepted
+                has_rejected = num_rejected > 0
+
+                accepted = rearrange(accepted, 'b -> b 1')
+                adjusted_prob = F.relu(prob[batch_range, accepted] - small_prob[batch_range, accepted])
+                adjusted_prob = adjusted_prob / adjusted_prob.sum(dim = -1, keepdim = True)
+                adjusted_prob = rearrange(adjusted_prob, 'b 1 d -> b d')
+
+                prob_next = torch.where(
+                    rearrange(has_rejected, '... -> ... 1'),
+                    adjusted_prob,
+                    prob_next
+                )
+
+                # do a bunch of slicing and align everything to the right, including kv caches
+
+                max_num_rejected = num_rejected.amax()
+                seq_arange = torch.arange(target.shape[-1], device = device, dtype = torch.long)
+
+                seq_offset_indices = seq_arange + (max_num_rejected - num_rejected)[..., None]
+
+                seq_lens -= num_rejected
+                max_seq_len = seq_lens.amax()
+
+                if batch > 1:
+                    target = F.pad(target, (0, max_num_rejected), value = target_pad_id)
+                    target = target[batch_range, seq_offset_indices]
+
+                    cache = F.pad(cache, (0, 0, 0, max_num_rejected), value = target_pad_id)
+                    small_cache = F.pad(small_cache, (0, 0, 0, max_num_rejected), value = target_pad_id)
+
+                    cache = rearrange(cache, 'b ... n d -> b n ... d')
+                    small_cache = rearrange(small_cache, 'b ... n d -> b n ... d')
+
+                    cache = cache[batch_range, seq_offset_indices]
+                    small_cache = small_cache[batch_range, seq_offset_indices]
+
+                    cache = rearrange(cache, 'b n ... d -> b ... n d')
+                    small_cache = rearrange(small_cache, 'b n ... d -> b ... n d')
+
+                    if max_seq_len == 0:
+                        target = target[:, 0:0]
+                        cache = cache[..., 0:0, :]
+                        small_cache = small_cache[..., 0:0, :]
+                    if target.shape[-1] > max_seq_len:
+                        target = target[:, -max_seq_len:]
+                        cache = cache[..., -max_seq_len:, :]
+                        small_cache = small_cache[..., -max_seq_len:, :]
+
+                # sample the additional token, one of the tricks in the paper to better bound the worst case
+
+                next_token = torch.multinomial(prob_next, 1)
+
+                target = torch.cat((target, next_token), dim = -1)
+                seq_lens += 1
+
+            # now left align
+
+            num_pad_left = target.shape[-1] - seq_lens
+            max_pad_left = num_pad_left.amax()
+            target = F.pad(target, (0, max_pad_left), value = target_pad_id)
+
+            seq_len_range = torch.arange(max_length, device = device, dtype = torch.long)
+            target = target[batch_range, seq_len_range + num_pad_left[..., None]]
+            target = target[..., prompt_seq_len:]
+
         # whether to return the target mask
         # for variable lengthed generation output
         # needed for conditioning voicebox, NS2, etc
@@ -800,8 +970,7 @@ class TextToSemantic(Module):
         return_logits = False,
         cond_drop_prob: Optional[float] = None,
         should_sim_regularize = True,
-        return_early_exit_loss = False,
-        return_early_exit_logits_only = False
+        return_early_exit_loss = False
     ):
         cond_drop_prob = default(cond_drop_prob, self.cond_drop_prob)
         drop_cond = cond_drop_prob > 0 and random() < cond_drop_prob
@@ -881,16 +1050,12 @@ class TextToSemantic(Module):
             mask = target_mask,
             context = source_emb,
             context_mask = context_mask,
-            return_hiddens = True,
-            early_exit_at_layer = self.early_exit_layer if return_early_exit_logits_only else None
+            return_hiddens = True
         )
 
         # decoder logits
 
-        if return_early_exit_logits_only:
-            logits = self.to_early_exit_semantic_logits(target_emb)
-        else:
-            logits = target_to_logit(target_emb)
+        logits = target_to_logit(target_emb)
 
         if not return_loss:
             return logits

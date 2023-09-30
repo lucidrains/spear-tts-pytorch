@@ -77,11 +77,11 @@ assert len(generated_dataset) == 10
 - [x] figure out the best way to store and manage the pseudo-labelled generated dataset
 - [x] batched beam search decoding
 - [x] allow for using rotary positions in decoder + flash attention, give Tri another citation
+- [x] integrate speculative decoding with some improvisation - done in same model using early exit strategy
 
 - [ ] add cached key / values for starter + single / grouped key values, make sure flash attention can support specialized causal mask before flash attention 2 is in pytorch core
 - [ ] polish the audio-text generation workflow
 - [ ] concatting the real audio-text dataset with the generated one -> or being able to convert real audio-text dataset to generated
-- [ ] see if one can speed up text-to-semantic transformer with NAR (perhaps maskgit style, or some AR / NAR hybrid) - also start toying around with speculative decoding
 
 ## Citations
 
