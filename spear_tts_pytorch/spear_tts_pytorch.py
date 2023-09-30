@@ -100,19 +100,29 @@ def top_p(logits, thres = 0.9):
     sorted_logits, sorted_indices = torch.sort(logits, descending=True)
     cum_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
 
-    sorted_indices_to_remove = cum_probs > (1 - thres)
+    sorted_indices_to_remove = cum_probs > thres
     sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
     sorted_indices_to_remove[:, 0] = 0
 
     sorted_logits[sorted_indices_to_remove] = float('-inf')
     return sorted_logits.scatter(1, sorted_indices, sorted_logits)
 
-def top_k(logits, thres = 0.9):
-    k = math.ceil((1 - thres) * logits.shape[-1])
+def top_k(logits, thres = 0.1, k = None):
+    if not exists(k):
+        k = math.ceil(thres * logits.shape[-1])
     val, ind = torch.topk(logits, k)
     probs = torch.full_like(logits, float('-inf'))
     probs.scatter_(1, ind, val)
     return probs
+
+# residual wrapper
+
+class Residual(nn.Module):
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+    def forward(self, x, **kwargs):
+        return self.fn(x, **kwargs) + x
 
 # rmsnorm
 
@@ -425,8 +435,11 @@ class TextToSemantic(Module):
 
         # embedding
 
-        semantic_token_emb = nn.Embedding(num_semantic_token_ids + int(autoset_semantic_eos_id), dim)
-        text_token_emb = nn.Embedding(num_text_token_ids + int(autoset_text_eos_id), dim)
+        num_semantic_token_ids_with_eos = num_semantic_token_ids + int(autoset_semantic_eos_id)
+        num_text_token_ids_with_eos = num_text_token_ids + int(autoset_text_eos_id)
+
+        semantic_token_emb = nn.Embedding(num_semantic_token_ids_with_eos, dim)
+        text_token_emb = nn.Embedding(num_text_token_ids_with_eos, dim)
 
         self.semantic_token_emb = semantic_token_emb
 
@@ -504,11 +517,10 @@ class TextToSemantic(Module):
             self.detach_early_exit_embed = detach_early_exit_embed
 
             self.to_early_exit_semantic_logits = nn.Sequential(
+                Residual(FeedForward(dim)),
                 RMSNorm(dim),
-                nn.Linear(dim, num_semantic_token_ids, bias = False)
+                nn.Linear(dim, num_semantic_token_ids_with_eos, bias = False)
             )
-
-            self.to_early_exit_semantic_logits[-1].weight = semantic_token_emb.weight
 
     @property
     def device(self):
@@ -1086,6 +1098,7 @@ class TextToSemanticWrapper(nn.Module):
         self,
         grapheme_token_ids,
         semantic_token_ids,
+        return_early_exit_loss = True
     ):
         source = grapheme_token_ids
         target = semantic_token_ids
@@ -1095,7 +1108,8 @@ class TextToSemanticWrapper(nn.Module):
             source_type = 'text',
             target_type = 'speech',
             return_loss = True,
-            return_logits = True
+            return_logits = True,
+            return_early_exit_loss = return_early_exit_loss
         )
 
         return loss, logits
