@@ -873,6 +873,8 @@ class TextToSemantic(Module):
                 has_rejected = num_rejected > 0
 
                 accepted = rearrange(accepted, 'b -> b 1')
+                accepted.clamp_(max = spec_decode_gamma - 1)
+
                 adjusted_prob = F.relu(prob[batch_range, accepted] - small_prob[batch_range, accepted])
                 adjusted_prob = adjusted_prob / adjusted_prob.sum(dim = -1, keepdim = True)
                 adjusted_prob = rearrange(adjusted_prob, 'b 1 d -> b d')
