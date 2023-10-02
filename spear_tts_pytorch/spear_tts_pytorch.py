@@ -606,7 +606,7 @@ class TextToSemantic(Module):
         assert cond_scale >= 1.
         assert not (cond_scale > 1 and self.cond_drop_prob == 0), 'you need to train with conditional drop probability greater than 0 to use classifier free guidance at inference, and it needs to be the right source to target pair'
 
-        if isinstance(source, (FloatTensor)) and source_type == 'speech':
+        if torch.is_tensor(source) and source_type == 'speech':
             assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
             source = self.wav2vec(source)
 
