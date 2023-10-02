@@ -616,7 +616,10 @@ class TextToSemantic(Module):
 
         if is_bearable(source, FloatTensor) and source_type == 'speech':
             assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
-            source = self.wav2vec(source)
+
+            with torch.no_grad():
+                self.wav2vec.eval()
+                source = self.wav2vec(source)
 
         if is_bearable(source, List[str]):
             assert exists(self.tokenizer_encode)
@@ -995,7 +998,10 @@ class TextToSemantic(Module):
 
         if is_bearable(source, FloatTensor) and source_type == 'speech':
             assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
-            source = self.wav2vec(source)
+
+            with torch.no_grad():
+                self.wav2vec.eval()
+                source = self.wav2vec(source)
 
         if is_bearable(source, List[str]):
             assert exists(self.tokenizer_encode)
