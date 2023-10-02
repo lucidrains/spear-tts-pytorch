@@ -6,7 +6,8 @@ from random import random
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-from torch import Tensor, nn, einsum, FloatTensor, IntTensor, LongTensor
+from torch import Tensor, nn, einsum, IntTensor, LongTensor
+
 from torch.nn import Module, ModuleList
 
 from torch.utils.data import Dataset
@@ -29,6 +30,13 @@ from spear_tts_pytorch.attend import Attend
 from spear_tts_pytorch.distributed import all_gather
 
 from tqdm import tqdm
+
+# types
+
+FloatTensor = Union[
+    torch.FloatTensor,
+    torch.cuda.FloatTensor
+]
 
 # helpers
 
@@ -606,7 +614,7 @@ class TextToSemantic(Module):
         assert cond_scale >= 1.
         assert not (cond_scale > 1 and self.cond_drop_prob == 0), 'you need to train with conditional drop probability greater than 0 to use classifier free guidance at inference, and it needs to be the right source to target pair'
 
-        if isinstance(source, (FloatTensor)) and source_type == 'speech':
+        if is_bearable(source, FloatTensor) and source_type == 'speech':
             assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
             source = self.wav2vec(source)
 
@@ -985,7 +993,7 @@ class TextToSemantic(Module):
         cond_drop_prob = default(cond_drop_prob, self.cond_drop_prob)
         drop_cond = cond_drop_prob > 0 and random() < cond_drop_prob
 
-        if isinstance(source, FloatTensor) and source_type == 'speech':
+        if is_bearable(source, FloatTensor) and source_type == 'speech':
             assert exists(self.wav2vec), 'wav2vec should be passed in, if generating with source as raw soundwave'
             source = self.wav2vec(source)
 
