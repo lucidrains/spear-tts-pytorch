@@ -413,6 +413,9 @@ class TextToSemantic(Module):
         self.dim = dim
         self.wav2vec = wav2vec
 
+        if exists(self.wav2vec):
+            freeze(self.wav2vec)
+
         self.tokenizer_encode = tokenizer_encode
 
         if use_openai_tokenizer:
