@@ -622,6 +622,7 @@ class TextToSemantic(Module):
 
             with torch.no_grad():
                 self.wav2vec.eval()
+                source = source.to(self.device)
                 source = self.wav2vec(source)
 
         if is_bearable(source, List[str]):
